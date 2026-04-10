@@ -871,13 +871,6 @@ function copyFault(id) {
   if (u && u.fault_reason) { copyText(u.fault_reason); }
 }
 function copyText(text) {
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(text).then(() => msg('已复制', true)).catch(() => copyFallback(text));
-  } else {
-    copyFallback(text);
-  }
-}
-function copyFallback(text) {
   const ta = document.createElement('textarea');
   ta.value = text;
   ta.style.cssText = 'position:fixed;left:-9999px';
@@ -1126,7 +1119,7 @@ async function loadSessions() {
     const remain = Math.max(0, Math.round(s.accessed_at + ttl - now));
     const key = s.session_key.length > 32 ? s.session_key.substring(0, 32) + '...' : s.session_key;
     return `<tr>
-      <td style="font-size:13px;font-family:monospace" title="${s.session_key}">${key}</td>
+      <td style="font-size:13px;font-family:monospace" title="${escAttr(s.session_key)}">${escHtml(key)}</td>
       <td>${uLabel}</td>
       <td style="font-size:12px">${t}</td>
       <td style="font-size:12px;color:${remain < 60 ? '#e65100' : '#666'}">${remain}s</td>
@@ -1183,7 +1176,7 @@ function showLogDetail(idx) {
     <b>模型：</b><code>${e.model || '-'}</code><br>
     <b>上游：</b>${e.remark || '-'} <span style="color:#999">(${e.upstream_id || '-'})</span><br>
     <b>客户端：</b>${e.client_ip || '-'}<br>
-    <b>会话：</b><code style="font-size:12px;word-break:break-all">${e.session_key || '-'}</code><br>
+    <b>会话：</b><code style="font-size:12px;word-break:break-all">${escHtml(e.session_key || '-')}</code><br>
     <b>状态码：</b>${e.status || '-'}<br>
     <b>耗时：</b>${e.duration_ms}ms<br>
     <b>结果：</b>${actionMap[e.action] || e.action}<br>
@@ -1193,13 +1186,14 @@ function showLogDetail(idx) {
     <pre style="background:#1e1e2e;color:#cdd6f4;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${e.detail.replace(/</g,'&lt;')}</pre>`;
   }
   if (e.request_body) {
-    html += `<div style="margin-top:12px"><b>请求体：</b></div>
+    html += `<div style="margin-top:12px;display:flex;align-items:center;gap:8px"><b>请求体：</b><button class="btn btn-sm" style="padding:1px 8px;font-size:11px;background:#eee" onclick="copyText(reqLogs._detailEntry.request_body)">复制</button></div>
     <pre style="background:#1e1e2e;color:#a6e3a1;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${e.request_body.replace(/</g,'&lt;')}</pre>`;
   }
   if (e.response_body) {
-    html += `<div style="margin-top:12px"><b>响应体：</b></div>
+    html += `<div style="margin-top:12px;display:flex;align-items:center;gap:8px"><b>响应体：</b><button class="btn btn-sm" style="padding:1px 8px;font-size:11px;background:#eee" onclick="copyText(reqLogs._detailEntry.response_body)">复制</button></div>
     <pre style="background:#1e1e2e;color:#f38ba8;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${e.response_body.replace(/</g,'&lt;')}</pre>`;
   }
+  reqLogs._detailEntry = e;
   document.getElementById('log-detail-content').innerHTML = html;
   document.getElementById('log-detail-mask').style.display = 'block';
   document.getElementById('log-detail-modal').style.display = 'block';

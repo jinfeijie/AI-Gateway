@@ -540,17 +540,26 @@ func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header 
 		flusher, ok := c.Writer.(http.Flusher)
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 256*1024), 256*1024)
+		var sseBuf strings.Builder
 		for scanner.Scan() {
 			line := scanner.Text()
 			c.Writer.Write([]byte(line + "\n"))
 			if ok {
 				flusher.Flush()
 			}
+			// 错误响应时捕获内容用于日志
+			if statusCode >= 400 && sseBuf.Len() < maxLogBodySize {
+				sseBuf.WriteString(line)
+				sseBuf.WriteByte('\n')
+			}
 			// 从 SSE data 行提取 usage
 			if strings.HasPrefix(line, "data: ") {
 				data := line[6:]
 				extractSSEUsage(data, &usage)
 			}
+		}
+		if sseBuf.Len() > 0 {
+			captured = []byte(sseBuf.String())
 		}
 	} else {
 		// 非流式：读取全部，解析 usage，再写出
