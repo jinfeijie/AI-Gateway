@@ -1,0 +1,20 @@
+# Binary
+ai-gateway
+
+# Data
+data/
+
+# Nohup
+nohup.out
+
+# Claude Code
+.claude/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store

@@ -1,0 +1,1183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Gateway Admin</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; color: #333; }
+.container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+h1 { margin-bottom: 20px; font-size: 24px; }
+.tabs { display: flex; gap: 4px; margin-bottom: 20px; }
+.tab { padding: 8px 16px; border: none; background: #e0e0e0; cursor: pointer; border-radius: 4px 4px 0 0; font-size: 14px; }
+.tab.active { background: #fff; font-weight: bold; }
+.panel { display: none; background: #fff; padding: 20px; border-radius: 0 4px 4px 4px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+.panel.active { display: block; }
+table { width: 100%; border-collapse: collapse; margin-top: 12px; table-layout: auto; }
+th, td { padding: 8px 12px; border-bottom: 1px solid #eee; text-align: left; font-size: 14px; white-space: nowrap; }
+th { background: #fafafa; font-weight: 600; }
+td.wrap { white-space: normal; word-break: break-all; }
+.btn { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
+.btn-primary { background: #1976d2; color: #fff; }
+.btn-danger { background: #d32f2f; color: #fff; }
+.btn-success { background: #388e3c; color: #fff; }
+.btn-warn { background: #f57c00; color: #fff; }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.form-row { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
+.form-row input, .form-row select, .form-row textarea { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+.form-row input { flex: 1; }
+.form-row textarea { flex: 1; min-height: 60px; font-family: monospace; }
+.status-active { color: #388e3c; font-weight: bold; }
+.status-faulted { color: #d32f2f; font-weight: bold; }
+.status-disabled { color: #999; }
+.status-cooldown { color: #e65100; font-weight: bold; }
+.status-halfopen { color: #1565c0; font-weight: bold; }
+.actions { display: flex; gap: 4px; }
+.msg { padding: 8px 12px; margin-bottom: 12px; border-radius: 4px; font-size: 13px; }
+.msg-ok { background: #e8f5e9; color: #2e7d32; }
+.msg-err { background: #ffebee; color: #c62828; }
+label { font-size: 14px; font-weight: 500; min-width: 80px; }
+.login-wrap { max-width: 360px; margin: 100px auto; background: #fff; padding: 32px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+.login-wrap h2 { margin-bottom: 20px; font-size: 20px; text-align: center; }
+.login-wrap input { width: 100%; padding: 10px 12px; margin-bottom: 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
+.login-wrap .btn { width: 100%; padding: 10px; font-size: 15px; }
+.login-err { color: #d32f2f; font-size: 13px; margin-bottom: 8px; text-align: center; }
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.header h1 { margin-bottom: 0; }
+.logout-btn { background: none; border: 1px solid #ccc; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; color: #666; }
+.modal-mask { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,.4); z-index:100; }
+.modal { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#fff; padding:24px; border-radius:8px; z-index:101; min-width:480px; max-width:600px; max-height:85vh; overflow-y:auto; box-shadow:0 4px 20px rgba(0,0,0,.2); }
+.modal h3 { margin-bottom:16px; font-size:16px; }
+.modal .form-row { margin-bottom:10px; }
+.modal .form-row input, .modal .form-row select { width:100%; }
+.modal-footer { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }
+.probe-info { display:flex; align-items:center; gap:12px; padding:12px; background:#f5f5f5; border-radius:6px; margin-bottom:16px; }
+.probe-info .icon { width:40px; height:40px; border-radius:8px; background:#1976d2; display:flex; align-items:center; justify-content:center; color:#fff; font-size:18px; flex-shrink:0; }
+.probe-info .detail { flex:1; min-width:0; }
+.probe-info .url { font-weight:600; font-size:14px; word-break:break-all; }
+.probe-info .meta { font-size:12px; color:#888; margin-top:2px; }
+.probe-info .st { font-size:13px; font-weight:600; margin-left:auto; flex-shrink:0; }
+.probe-log { background:#1e1e2e; color:#cdd6f4; border-radius:8px; padding:16px; font-family:'SF Mono',Menlo,monospace; font-size:13px; line-height:1.7; min-height:120px; max-height:260px; overflow-y:auto; margin-bottom:12px; }
+.probe-log .g { color:#a6e3a1; }
+.probe-log .y { color:#f9e2af; }
+.probe-log .r { color:#f38ba8; }
+.probe-log .c { color:#89b4fa; }
+.probe-log .d { color:#9399b2; }
+.probe-log hr { border:none; border-top:1px solid #45475a; margin:8px 0; }
+.probe-ok { color:#a6e3a1; font-weight:600; font-size:14px; }
+.probe-fail { color:#f38ba8; font-weight:600; font-size:14px; }
+</style>
+</head>
+<body>
+<!-- 登录界面 -->
+<div id="login-page" class="login-wrap" style="display:none">
+  <h2>AI Gateway</h2>
+  <div id="login-err" class="login-err"></div>
+  <input id="login-user" placeholder="用户名" autocomplete="username">
+  <input id="login-pass" type="password" placeholder="密码" autocomplete="current-password">
+  <button class="btn btn-primary" onclick="doLogin()">登录</button>
+</div>
+
+<!-- 管理面板 -->
+<div id="app" class="container" style="display:none">
+<div class="header">
+  <h1>AI Gateway Admin</h1>
+  <button class="logout-btn" onclick="doLogout()">退出登录</button>
+</div>
+<div class="tabs">
+  <button class="tab active" data-tab="groups" onclick="showTab('groups')">分组管理</button>
+  <button class="tab" data-tab="upstreams" onclick="showTab('upstreams')">上游管理</button>
+  <button class="tab" data-tab="health" onclick="showTab('health')">健康检查</button>
+  <button class="tab" data-tab="failover" onclick="showTab('failover')">故障转移</button>
+  <button class="tab" data-tab="errors" onclick="showTab('errors')">错误码映射</button>
+  <button class="tab" data-tab="sessions" onclick="showTab('sessions')">会话亲和</button>
+  <button class="tab" data-tab="reqlog" onclick="showTab('reqlog')">请求日志</button>
+</div>
+<div id="msg"></div>
+
+<!-- 分组管理 -->
+<div id="groups" class="panel active">
+  <div class="form-row">
+    <input id="g-name" placeholder="分组名称">
+    <button class="btn btn-primary" onclick="addGroup()">添加分组</button>
+  </div>
+  <table>
+    <thead><tr><th>ID</th><th>名称</th><th>支持模型</th><th>今日花费</th><th>总花费</th><th>API Key</th><th>操作</th></tr></thead>
+    <tbody id="g-list"></tbody>
+  </table>
+</div>
+
+<!-- 上游管理 -->
+<div id="upstreams" class="panel">
+  <div class="form-row">
+    <select id="u-group"></select>
+    <input id="u-api" placeholder="API 地址 (如 https://api.anthropic.com)">
+    <input id="u-key" placeholder="API Key">
+    <input id="u-remark" placeholder="备注">
+    <button class="btn btn-primary" onclick="addUpstream()">添加</button>
+  </div>
+  <div class="form-row">
+    <label>按分组过滤:</label>
+    <select id="u-filter" onchange="loadUpstreams()"><option value="">全部</option></select>
+    <button class="btn btn-primary" onclick="batchProbe()" id="batch-probe-btn">批量测活</button>
+  </div>
+  <table>
+    <thead><tr><th>备注</th><th>API</th><th>分组</th><th>模型</th><th>状态</th><th>延迟</th><th>今日花费</th><th>总花费</th><th>故障信息</th><th>操作</th></tr></thead>
+    <tbody id="u-list"></tbody>
+    <tfoot id="u-foot"></tfoot>
+  </table>
+</div>
+
+<!-- 健康检查 -->
+<div id="health" class="panel">
+  <h4 style="margin:0 0 12px;font-size:15px">全局默认配置</h4>
+  <div class="form-row"><label>启用</label><input type="checkbox" id="hc-enabled"></div>
+  <div class="form-row"><label>间隔(秒)</label><input type="number" id="hc-interval" value="60" min="10"></div>
+  <div class="form-row"><label>重试次数</label><input type="number" id="hc-retries" value="3" min="1"></div>
+  <div class="form-row"><label>超时(秒)</label><input type="number" id="hc-timeout" value="10" min="1"></div>
+  <div class="form-row"><label>Headers</label><textarea id="hc-headers" placeholder='{"x-api-key":"sk-xxx","anthropic-version":"2023-06-01"}'></textarea></div>
+  <div class="form-row"><label>Body</label><textarea id="hc-body" placeholder="留空使用默认探测请求"></textarea></div>
+  <div class="form-row"><button class="btn btn-primary" onclick="saveHealthCheck()">保存全局配置</button></div>
+
+  <hr style="margin:20px 0;border:none;border-top:1px solid #e2e8f0">
+  <h4 style="margin:0 0 8px;font-size:15px">测活模型</h4>
+  <p style="font-size:13px;color:#666;margin:0 0 12px">配置手动测活和自动健康检查可用的模型列表，以及自动健康检查使用的默认模型。</p>
+  <div class="form-row">
+    <label>默认模型</label>
+    <select id="pm-default" style="width:240px" onchange="saveProbeModels()"></select>
+  </div>
+  <div class="form-row">
+    <label>模型列表</label>
+    <input id="pm-input" placeholder="添加模型ID，如 claude-sonnet-4-6" style="font-family:monospace">
+    <button class="btn btn-primary" onclick="addProbeModel()">添加</button>
+  </div>
+  <div id="pm-list" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px"></div>
+
+  <hr style="margin:20px 0;border:none;border-top:1px solid #e2e8f0">
+  <h4 style="margin:0 0 12px;font-size:15px">分组配置 <span style="font-weight:normal;font-size:12px;color:#999">（留空使用全局配置）</span></h4>
+  <div id="hc-groups"></div>
+
+  <hr style="margin:20px 0;border:none;border-top:1px solid #e2e8f0">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <h4 style="margin:0;font-size:15px">检查历史</h4>
+    <div style="display:flex;gap:8px;align-items:center">
+      <select id="hc-hist-filter" onchange="loadHistory()" style="padding:4px 8px;font-size:13px;border:1px solid #ccc;border-radius:4px">
+        <option value="">全部上游</option>
+      </select>
+      <button class="btn btn-sm" onclick="loadHistory()">刷新</button>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>时间</th><th>上游</th><th>分组</th><th>结果</th><th>状态码</th><th>错误信息</th></tr></thead>
+    <tbody id="hc-hist-list"></tbody>
+  </table>
+</div>
+
+<!-- 故障转移 -->
+<div id="failover" class="panel">
+  <p style="font-size:13px;color:#666;margin-bottom:16px">当上游返回指定状态码时，按规则执行动作：<b>下线</b>（标记故障）或<b>冷却</b>（暂停接收流量一段时间后自动恢复）。每个分组可独立配置，留空使用默认规则。</p>
+  <div id="fo-list"></div>
+</div>
+
+<!-- 错误码映射 -->
+<div id="errors" class="panel">
+  <h4 style="margin:0 0 12px;font-size:15px">错误码映射</h4>
+  <div class="form-row">
+    <input type="number" id="em-src" placeholder="源状态码" style="width:100px">
+    <input type="number" id="em-tgt" placeholder="目标状态码" style="width:100px">
+    <input id="em-msg" placeholder="覆盖错误信息(可选)">
+    <button class="btn btn-primary" onclick="addErrorMapping()">添加</button>
+  </div>
+  <table>
+    <thead><tr><th>源状态码</th><th>目标状态码</th><th>覆盖信息</th><th>操作</th></tr></thead>
+    <tbody id="em-list"></tbody>
+  </table>
+
+  <hr style="margin:24px 0;border:none;border-top:1px solid #e2e8f0">
+  <h4 style="margin:0 0 8px;font-size:15px">字段剔除</h4>
+  <p style="font-size:13px;color:#666;margin:0 0 12px">转发前从请求体中删除指定字段，避免上游返回 "Extra inputs are not permitted" 错误。支持通配符 <code>*</code> 匹配数组元素。</p>
+  <div class="form-row">
+    <input id="sf-input" placeholder="字段路径，如 betas 或 system.*.cache_control.*.scope" style="font-family:monospace">
+    <button class="btn btn-primary" onclick="addStripField()">添加</button>
+  </div>
+  <div id="sf-list" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+</div>
+
+<!-- 会话亲和 -->
+<div id="sessions" class="panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <p style="font-size:13px;color:#666;margin:0">当前活跃的会话绑定关系，TTL 5 分钟无活动自动清除。</p>
+    <button class="btn btn-sm" onclick="loadSessions()">刷新</button>
+  </div>
+  <table>
+    <thead><tr><th>会话标识</th><th>绑定上游</th><th>最后访问</th><th>距过期</th></tr></thead>
+    <tbody id="sess-list"></tbody>
+  </table>
+</div>
+
+<!-- 请求日志 -->
+<div id="reqlog" class="panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <p style="font-size:13px;color:#666;margin:0">最近 500 条代理请求记录，持久化存储于 data/logs/ 目录。</p>
+    <div style="display:flex;gap:8px;align-items:center">
+      <select id="rl-filter" onchange="renderReqLogs()" style="padding:4px 8px;font-size:13px;border:1px solid #ccc;border-radius:4px">
+        <option value="">全部</option>
+        <option value="success">成功</option>
+        <option value="failover">故障转移</option>
+        <option value="error">错误</option>
+      </select>
+      <button class="btn btn-sm" onclick="loadReqLogs()">刷新</button>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>时间</th><th>分组</th><th>模型</th><th>上游</th><th>状态码</th><th>耗时</th><th>结果</th><th>详情</th></tr></thead>
+    <tbody id="rl-list"></tbody>
+  </table>
+</div>
+</div>
+
+<!-- 日志详情弹窗 -->
+<div id="log-detail-mask" class="modal-mask" onclick="closeLogDetail()"></div>
+<div id="log-detail-modal" class="modal" style="display:none;max-width:700px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <h3 style="margin:0">请求详情</h3>
+    <span style="cursor:pointer;font-size:20px;color:#999" onclick="closeLogDetail()">&times;</span>
+  </div>
+  <div id="log-detail-content"></div>
+  <div class="modal-footer">
+    <button class="btn" onclick="closeLogDetail()">关闭</button>
+  </div>
+</div>
+
+<div id="edit-mask" class="modal-mask" onclick="closeEditModal()"></div>
+<div id="edit-modal" class="modal" style="display:none">
+  <h3>编辑上游</h3>
+  <input type="hidden" id="edit-id">
+  <div class="form-row"><label>API 地址</label><input id="edit-api"></div>
+  <div class="form-row"><label>API Key</label><input id="edit-key" placeholder="留空则不修改"></div>
+  <div class="form-row"><label>备注</label><input id="edit-remark"></div>
+  <div class="form-row"><label>支持模型</label><input id="edit-models" placeholder="逗号分隔，留空继承分组" style="font-family:monospace"></div>
+  <div class="modal-footer">
+    <button class="btn" onclick="closeEditModal()">取消</button>
+    <button class="btn btn-primary" onclick="saveEditUpstream()">保存</button>
+  </div>
+</div>
+
+<!-- 分组模型编辑弹窗 -->
+<div id="gm-mask" class="modal-mask" onclick="closeGroupModelsModal()"></div>
+<div id="gm-modal" class="modal" style="display:none">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <h3 style="margin:0" id="gm-title">分组支持模型</h3>
+    <span style="cursor:pointer;font-size:20px;color:#999" onclick="closeGroupModelsModal()">&times;</span>
+  </div>
+  <input type="hidden" id="gm-id">
+  <p style="font-size:13px;color:#666;margin:0 0 12px">配置该分组支持的模型，留空表示不限制。请求中的 model 不在列表中的将不会路由到该分组的上游。</p>
+  <div class="form-row">
+    <input id="gm-input" placeholder="输入模型ID，如 claude-sonnet-4-6" style="font-family:monospace">
+    <button class="btn btn-primary" onclick="addGroupModel()">添加</button>
+  </div>
+  <div id="gm-tags" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;min-height:30px"></div>
+  <div class="modal-footer">
+    <button class="btn" onclick="closeGroupModelsModal()">关闭</button>
+    <button class="btn btn-primary" onclick="saveGroupModels()">保存</button>
+  </div>
+</div>
+
+<!-- 测活弹窗 -->
+<div id="probe-mask" class="modal-mask" onclick="closeProbeModal()"></div>
+<div id="probe-modal" class="modal" style="display:none">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <h3 style="margin:0" id="probe-title">测试账号连接</h3>
+    <span style="cursor:pointer;font-size:20px;color:#999" onclick="closeProbeModal()">&times;</span>
+  </div>
+  <div id="probe-info-area" style="max-height:40vh;overflow-y:auto"></div>
+  <div class="form-row"><label>选择测试模型</label>
+    <select id="probe-model"></select>
+  </div>
+  <div id="probe-log" class="probe-log" style="display:none"></div>
+  <div class="modal-footer">
+    <button class="btn" onclick="closeProbeModal()">关闭</button>
+    <button class="btn btn-success" id="probe-run-btn" onclick="runProbe()">开始测试</button>
+  </div>
+</div>
+
+<script>
+const BASE = '/admin';
+let groups = [], upstreams = [], errorMappings = [];
+
+function showLogin() {
+  document.getElementById('login-page').style.display = '';
+  document.getElementById('app').style.display = 'none';
+}
+function showApp() {
+  document.getElementById('login-page').style.display = 'none';
+  document.getElementById('app').style.display = '';
+  loadGroups(); loadUpstreams(); loadHealthCheck(); loadErrorMappings(); loadStripFields();
+  restoreTab();
+}
+
+async function doLogin() {
+  const user = document.getElementById('login-user').value.trim();
+  const pass = document.getElementById('login-pass').value;
+  if (!user || !pass) return;
+  try {
+    const r = await fetch(BASE + '/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: user, password: pass })
+    });
+    if (!r.ok) {
+      const j = await r.json();
+      document.getElementById('login-err').textContent = j.error || '登录失败';
+      return;
+    }
+    document.getElementById('login-err').textContent = '';
+    showApp();
+  } catch(e) {
+    document.getElementById('login-err').textContent = '网络错误';
+  }
+}
+function doLogout() {
+  document.cookie = 'session=; Max-Age=0; path=/';
+  showLogin();
+}
+// 回车登录
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && document.getElementById('login-page').style.display !== 'none') doLogin();
+});
+
+function showTab(id, push) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  const tabBtn = document.querySelector(`.tab[data-tab="${id}"]`);
+  if (tabBtn) tabBtn.classList.add('active');
+  if (push !== false) history.replaceState(null, '', '/ui#' + id);
+  if (id === 'health') { renderGroupHealthCheck(); loadHistory(); }
+  if (id === 'sessions') { loadSessions(); }
+  if (id === 'reqlog') { loadReqLogs(); }
+}
+function restoreTab() {
+  const hash = location.hash.replace('#', '');
+  if (hash && document.getElementById(hash)) showTab(hash, false);
+}
+
+function msg(text, ok) {
+  const el = document.getElementById('msg');
+  el.className = 'msg ' + (ok ? 'msg-ok' : 'msg-err');
+  el.textContent = text;
+  setTimeout(() => el.textContent = '', 3000);
+}
+
+async function api(method, path, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(BASE + path, opts);
+  if (r.status === 401) { showLogin(); throw new Error('unauthorized'); }
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || 'request failed');
+  return j;
+}
+
+// Groups
+async function loadGroups() {
+  const [r, sr] = await Promise.all([
+    api('GET', '/groups'),
+    api('GET', '/stats')
+  ]);
+  groups = r.data || [];
+  const groupStats = (sr.data && sr.data.groups) || {};
+  const tbody = document.getElementById('g-list');
+  tbody.innerHTML = groups.map(g => {
+    const models = (g.models && g.models.length) ? g.models.map(m => `<span style="background:#e3f2fd;border:1px solid #90caf9;border-radius:3px;padding:1px 5px;font-size:11px;font-family:monospace">${m}</span>`).join(' ') : '<span style="color:#999;font-size:12px">不限</span>';
+    const gs = groupStats[g.id] || {};
+    const todayCost = gs.today_cost ? '$' + gs.today_cost.toFixed(4) : '-';
+    const totalCost = gs.total_cost ? '$' + gs.total_cost.toFixed(4) : '-';
+    return `<tr>
+    <td style="font-size:12px;color:#999">${g.id.substring(0,8)}</td>
+    <td>${g.name}</td>
+    <td style="max-width:300px">${models}</td>
+    <td style="font-size:13px;color:#388e3c;font-weight:500">${todayCost}</td>
+    <td style="font-size:13px;color:#e65100;font-weight:500">${totalCost}</td>
+    <td style="font-size:12px;font-family:monospace">
+      <span id="gk-${g.id}" style="user-select:all">${g.api_key || '-'}</span>
+      <button class="btn btn-sm" style="margin-left:4px;padding:2px 6px;font-size:11px;background:#eee" onclick="copyKey('${g.id}')" title="复制">&#128203;</button>
+      <button class="btn btn-sm" style="padding:2px 6px;font-size:11px;background:#eee" onclick="regenKey('${g.id}')" title="重新生成">&#8635;</button>
+    </td>
+    <td class="actions">
+      <button class="btn btn-sm" style="background:#607d8b;color:#fff" onclick="editGroupModels('${g.id}')">模型</button>
+      <button class="btn btn-danger btn-sm" onclick="delGroup('${g.id}')">删除</button>
+    </td>
+  </tr>`;
+  }).join('');
+  // 更新上游表单的分组下拉
+  const sel = document.getElementById('u-group');
+  const flt = document.getElementById('u-filter');
+  sel.innerHTML = groups.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
+  flt.innerHTML = '<option value="">全部</option>' + groups.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
+  // 更新故障转移 tab
+  renderFailover();
+}
+async function addGroup() {
+  const name = document.getElementById('g-name').value.trim();
+  if (!name) return;
+  try { await api('POST', '/groups', { name }); document.getElementById('g-name').value = ''; msg('分组已添加', true); loadGroups(); }
+  catch(e) { msg(e.message, false); }
+}
+async function delGroup(id) {
+  if (!confirm('删除分组将同时删除该分组下所有上游，确认？')) return;
+  try { await api('DELETE', '/groups/' + id); msg('已删除', true); loadGroups(); loadUpstreams(); }
+  catch(e) { msg(e.message, false); }
+}
+function copyKey(id) {
+  const el = document.getElementById('gk-' + id);
+  if (el) { navigator.clipboard.writeText(el.textContent); msg('已复制', true); }
+}
+async function regenKey(id) {
+  if (!confirm('重新生成 API Key？旧 Key 将立即失效。')) return;
+  try { const r = await api('POST', '/groups/' + id + '/regen-key'); msg('Key 已更新', true); loadGroups(); }
+  catch(e) { msg(e.message, false); }
+}
+let gmModels = [];
+function editGroupModels(id) {
+  const g = groups.find(g => g.id === id);
+  if (!g) return;
+  document.getElementById('gm-id').value = id;
+  document.getElementById('gm-title').textContent = g.name + ' — 支持模型';
+  document.getElementById('gm-input').value = '';
+  gmModels = [...(g.models || [])];
+  renderGmTags();
+  document.getElementById('gm-mask').style.display = 'block';
+  document.getElementById('gm-modal').style.display = 'block';
+}
+function closeGroupModelsModal() {
+  document.getElementById('gm-mask').style.display = 'none';
+  document.getElementById('gm-modal').style.display = 'none';
+}
+function renderGmTags() {
+  const container = document.getElementById('gm-tags');
+  if (gmModels.length === 0) {
+    container.innerHTML = '<span style="color:#999;font-size:13px">未配置，不限制模型</span>';
+    return;
+  }
+  container.innerHTML = gmModels.map((m, i) => `<span style="display:inline-flex;align-items:center;gap:4px;background:#e3f2fd;border:1px solid #90caf9;border-radius:4px;padding:4px 8px;font-family:monospace;font-size:13px">${m}<span style="cursor:pointer;color:#999;font-size:16px;line-height:1" onclick="removeGroupModel(${i})">&times;</span></span>`).join('');
+}
+function addGroupModel() {
+  const input = document.getElementById('gm-input');
+  const val = input.value.trim();
+  if (!val) return;
+  if (gmModels.includes(val)) { msg('已存在', false); return; }
+  gmModels.push(val);
+  input.value = '';
+  renderGmTags();
+}
+function removeGroupModel(idx) {
+  gmModels.splice(idx, 1);
+  renderGmTags();
+}
+async function saveGroupModels() {
+  const id = document.getElementById('gm-id').value;
+  const g = groups.find(g => g.id === id);
+  if (!g) return;
+  try {
+    await api('PUT', '/groups/' + id, { name: g.name, models: gmModels, failover_rules: g.failover_rules || [], health_check: g.health_check || null });
+    msg('分组模型已更新', true);
+    closeGroupModelsModal();
+    loadGroups();
+  } catch(e) { msg(e.message, false); }
+}
+function renderFailover() {
+  const defaultRules = [
+    {code:404,action:'offline',cooldown_s:0,use_header:''},
+    {code:429,action:'cooldown',cooldown_s:60,use_header:'retry-after'},
+    {code:500,action:'offline',cooldown_s:0,use_header:''},
+    {code:502,action:'offline',cooldown_s:0,use_header:''},
+    {code:503,action:'offline',cooldown_s:0,use_header:''},
+    {code:504,action:'offline',cooldown_s:0,use_header:''}
+  ];
+  const container = document.getElementById('fo-list');
+  container.innerHTML = groups.map(g => {
+    const rules = (g.failover_rules && g.failover_rules.length) ? g.failover_rules : defaultRules;
+    const isDefault = !(g.failover_rules && g.failover_rules.length);
+    return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <span style="font-weight:600;font-size:15px">${g.name}</span>
+        ${isDefault ? '<span style="font-size:12px;color:#999;background:#f1f5f9;padding:2px 8px;border-radius:4px">使用默认规则</span>' : ''}
+      </div>
+      <table style="width:100%;margin-bottom:8px">
+        <thead><tr><th>状态码</th><th>动作</th><th>冷却秒数</th><th>读取 Header</th><th>操作</th></tr></thead>
+        <tbody id="fo-rules-${g.id}">
+          ${rules.map((r,i) => `<tr>
+            <td><input type="number" value="${r.code}" data-gid="${g.id}" data-idx="${i}" data-field="code" style="width:70px;padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px;font-family:monospace" onchange="foFieldChange(this)"></td>
+            <td><select data-gid="${g.id}" data-idx="${i}" data-field="action" style="padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px" onchange="foFieldChange(this)">
+              <option value="offline" ${r.action==='offline'?'selected':''}>下线</option>
+              <option value="cooldown" ${r.action==='cooldown'?'selected':''}>冷却</option>
+            </select></td>
+            <td><input type="number" value="${r.action==='cooldown'?(r.cooldown_s||60):''}" data-gid="${g.id}" data-idx="${i}" data-field="cooldown_s" ${r.action!=='cooldown'?'disabled':''} style="width:70px;padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px;font-family:monospace" placeholder="60" onchange="foFieldChange(this)"></td>
+            <td><input value="${r.use_header||''}" data-gid="${g.id}" data-idx="${i}" data-field="use_header" ${r.action!=='cooldown'?'disabled':''} style="width:120px;padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px;font-family:monospace" placeholder="retry-after" onchange="foFieldChange(this)"></td>
+            <td><button class="btn btn-danger btn-sm" onclick="foDeleteRule('${g.id}',${i})">删除</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm" onclick="foAddRule('${g.id}')" style="font-size:12px">+ 添加规则</button>
+        <button class="btn btn-primary btn-sm" onclick="foSave('${g.id}','${g.name}')">保存</button>
+        ${!isDefault ? '<button class="btn btn-sm" onclick="foReset(\''+g.id+'\',\''+g.name+'\')" style="font-size:12px;color:#999">恢复默认</button>' : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+// 临时存储编辑中的规则
+let foEditing = {};
+function foGetRules(gid) {
+  const defaultRules = [
+    {code:404,action:'offline',cooldown_s:0,use_header:''},
+    {code:429,action:'cooldown',cooldown_s:60,use_header:'retry-after'},
+    {code:500,action:'offline',cooldown_s:0,use_header:''},
+    {code:502,action:'offline',cooldown_s:0,use_header:''},
+    {code:503,action:'offline',cooldown_s:0,use_header:''},
+    {code:504,action:'offline',cooldown_s:0,use_header:''}
+  ];
+  if (foEditing[gid]) return foEditing[gid];
+  const g = groups.find(g => g.id === gid);
+  if (g && g.failover_rules && g.failover_rules.length) return JSON.parse(JSON.stringify(g.failover_rules));
+  return JSON.parse(JSON.stringify(defaultRules));
+}
+function foCollectRules(gid) {
+  const tbody = document.getElementById('fo-rules-' + gid);
+  if (!tbody) return [];
+  const rows = tbody.querySelectorAll('tr');
+  const rules = [];
+  rows.forEach(row => {
+    const inputs = row.querySelectorAll('input, select');
+    const r = {};
+    inputs.forEach(el => {
+      const f = el.dataset.field;
+      if (f === 'code' || f === 'cooldown_s') r[f] = parseInt(el.value) || 0;
+      else if (f === 'action') r[f] = el.value;
+      else if (f === 'use_header') r[f] = el.value.trim();
+    });
+    if (r.code > 0) rules.push(r);
+  });
+  return rules;
+}
+function foFieldChange(el) {
+  const gid = el.dataset.gid;
+  const idx = parseInt(el.dataset.idx);
+  const field = el.dataset.field;
+  if (field === 'action') {
+    const row = el.closest('tr');
+    const cs = row.querySelector('[data-field="cooldown_s"]');
+    const uh = row.querySelector('[data-field="use_header"]');
+    if (el.value === 'cooldown') { cs.disabled = false; uh.disabled = false; if(!cs.value) cs.value = '60'; }
+    else { cs.disabled = true; cs.value = ''; uh.disabled = true; uh.value = ''; }
+  }
+}
+function foDeleteRule(gid, idx) {
+  const rules = foCollectRules(gid);
+  rules.splice(idx, 1);
+  foEditing[gid] = rules;
+  renderFailover();
+}
+function foAddRule(gid) {
+  const rules = foCollectRules(gid);
+  rules.push({code:0, action:'offline', cooldown_s:0, use_header:''});
+  foEditing[gid] = rules;
+  renderFailover();
+}
+async function foSave(gid, name) {
+  const rules = foCollectRules(gid).filter(r => r.code > 0);
+  try {
+    await api('PUT', '/groups/' + gid, { name, failover_rules: rules });
+    msg('故障转移规则已保存', true);
+    delete foEditing[gid];
+    loadGroups();
+  } catch(e) { msg(e.message, false); }
+}
+async function foReset(gid, name) {
+  try {
+    await api('PUT', '/groups/' + gid, { name, failover_rules: [] });
+    msg('已恢复默认规则', true);
+    delete foEditing[gid];
+    loadGroups();
+  } catch(e) { msg(e.message, false); }
+}
+
+// Upstreams
+function groupName(id) { const g = groups.find(g => g.id === id); return g ? g.name : id.substring(0,8); }
+let upstreamStats = {};
+async function loadUpstreams() {
+  const filter = document.getElementById('u-filter').value;
+  const [r, sr] = await Promise.all([
+    api('GET', '/upstreams' + (filter ? '?group_id=' + filter : '')),
+    api('GET', '/stats')
+  ]);
+  upstreams = r.data || [];
+  const stats = (sr.data && sr.data.upstreams) || {};
+  upstreamStats = stats;
+  const tbody = document.getElementById('u-list');
+  tbody.innerHTML = upstreams.map(u => {
+    const rs = u.runtime_status || 'normal';
+    const scMap = { normal: 'status-active', faulted: 'status-faulted', cooldown: 'status-cooldown', half_open: 'status-halfopen', disabled: 'status-disabled' };
+    const labelMap = { normal: '正常', faulted: '故障', cooldown: '冷却中', half_open: '半开', disabled: '禁用' };
+    const sc = scMap[rs] || 'status-disabled';
+    const statusLabel = labelMap[rs] || rs;
+    let statusExtra = '';
+    if (rs === 'cooldown' && u.cooldown_until) {
+      const remain = Math.max(0, Math.round(u.cooldown_until - Date.now()/1000));
+      statusExtra = ` <span class="cd-timer" data-until="${u.cooldown_until}">${remain}s</span>`;
+    }
+    if (rs === 'half_open') {
+      statusExtra = ' <span style="font-weight:normal;font-size:12px">尝试恢复中</span>';
+    }
+    let fault = '-';
+    if (u.faulted_at) {
+      fault = `<span style="color:#d32f2f">${u.fault_type === 'manual' ? '手动' : '自动'}</span> @ ${new Date(u.faulted_at*1000).toLocaleString()}`;
+      if (u.fault_reason) fault += `<br><span style="color:#666">${u.fault_reason}</span>`;
+    }
+    const st = stats[u.id] || {};
+    const latency = st.avg_latency_ms ? st.avg_latency_ms + 'ms' : '-';
+    const todayCost = st.today_cost ? '$' + st.today_cost.toFixed(4) : '-';
+    const totalCost = st.total_cost ? '$' + st.total_cost.toFixed(4) : '-';
+    return `<tr>
+      <td>${u.remark || '-'}</td>
+      <td style="font-size:13px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${u.api}">${u.api}</td>
+      <td>${groupName(u.group_id)}</td>
+      <td style="font-size:11px;max-width:200px">${(u.models && u.models.length) ? u.models.map(m => '<span style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:3px;padding:1px 4px;font-family:monospace;margin:1px">' + m + '</span>').join(' ') : '<span style="color:#999">继承分组</span>'}</td>
+      <td class="${sc}">${statusLabel}${statusExtra}</td>
+      <td style="font-size:12px;color:#1976d2">${latency}</td>
+      <td style="font-size:12px;color:#388e3c;font-weight:500">${todayCost}</td>
+      <td style="font-size:12px;color:#e65100;font-weight:500">${totalCost}</td>
+      <td style="font-size:12px;max-width:250px;white-space:normal;word-break:break-word">${fault}</td>
+      <td class="actions">
+        <button class="btn btn-primary btn-sm" onclick="editUp('${u.id}')">编辑</button>
+        <button class="btn btn-sm" style="background:#607d8b;color:#fff" onclick="probeUp('${u.id}')">测活</button>
+        ${u.status === 'active' || u.status === 'half_open' ? `<button class="btn btn-warn btn-sm" onclick="faultUp('${u.id}')">标记故障</button>` : ''}
+        ${u.status === 'faulted' ? `<button class="btn btn-success btn-sm" onclick="recoverUp('${u.id}')">恢复</button>` : ''}
+        <button class="btn btn-danger btn-sm" onclick="delUp('${u.id}')">删除</button>
+      </td>
+    </tr>`;
+  }).join('');
+  // 全站汇总
+  let siteTodayCost = 0, siteTotalCost = 0;
+  for (const k in stats) { siteTodayCost += stats[k].today_cost || 0; siteTotalCost += stats[k].total_cost || 0; }
+  document.getElementById('u-foot').innerHTML = `<tr style="background:#fafafa;font-weight:600">
+    <td colspan="6" style="text-align:right">全站合计</td>
+    <td style="color:#388e3c">$${siteTodayCost.toFixed(4)}</td>
+    <td style="color:#e65100">$${siteTotalCost.toFixed(4)}</td>
+    <td colspan="2"></td>
+  </tr>`;
+  startCooldownTimers();
+}
+let cdTimerInterval = null;
+function startCooldownTimers() {
+  if (cdTimerInterval) clearInterval(cdTimerInterval);
+  const timers = document.querySelectorAll('.cd-timer');
+  if (timers.length === 0) return;
+  cdTimerInterval = setInterval(() => {
+    let anyActive = false;
+    timers.forEach(el => {
+      const until = parseFloat(el.dataset.until);
+      const remain = Math.max(0, Math.round(until - Date.now()/1000));
+      el.textContent = remain + 's';
+      if (remain > 0) anyActive = true;
+    });
+    if (!anyActive) { clearInterval(cdTimerInterval); cdTimerInterval = null; loadUpstreams(); }
+  }, 1000);
+}
+async function addUpstream() {
+  const gid = document.getElementById('u-group').value;
+  const a = document.getElementById('u-api').value.trim();
+  const k = document.getElementById('u-key').value.trim();
+  const r = document.getElementById('u-remark').value.trim();
+  if (!gid || !a || !k) { msg('请填写完整', false); return; }
+  try { await api('POST', '/upstreams', { group_id: gid, api: a, api_key: k, remark: r }); msg('上游已添加', true); loadUpstreams();
+    document.getElementById('u-api').value = ''; document.getElementById('u-key').value = ''; document.getElementById('u-remark').value = '';
+  } catch(e) { msg(e.message, false); }
+}
+async function delUp(id) {
+  if (!confirm('确认删除？')) return;
+  try { await api('DELETE', '/upstreams/' + id); msg('已删除', true); loadUpstreams(); }
+  catch(e) { msg(e.message, false); }
+}
+async function faultUp(id) {
+  try { await api('POST', '/upstreams/' + id + '/fault'); msg('已标记故障', true); loadUpstreams(); }
+  catch(e) { msg(e.message, false); }
+}
+async function recoverUp(id) {
+  try { await api('POST', '/upstreams/' + id + '/recover'); msg('已恢复', true); loadUpstreams(); }
+  catch(e) { msg(e.message, false); }
+}
+function editUp(id) {
+  const u = upstreams.find(u => u.id === id);
+  if (!u) return;
+  document.getElementById('edit-id').value = u.id;
+  document.getElementById('edit-api').value = u.api;
+  document.getElementById('edit-key').value = '';
+  document.getElementById('edit-remark').value = u.remark || '';
+  document.getElementById('edit-models').value = (u.models || []).join(', ');
+  document.getElementById('edit-mask').style.display = 'block';
+  document.getElementById('edit-modal').style.display = 'block';
+}
+function closeEditModal() {
+  document.getElementById('edit-mask').style.display = 'none';
+  document.getElementById('edit-modal').style.display = 'none';
+}
+async function saveEditUpstream() {
+  const id = document.getElementById('edit-id').value;
+  const body = {};
+  const a = document.getElementById('edit-api').value.trim();
+  const k = document.getElementById('edit-key').value.trim();
+  const r = document.getElementById('edit-remark').value.trim();
+  const m = document.getElementById('edit-models').value.trim();
+  if (a) body.api = a;
+  if (k) body.api_key = k;
+  body.remark = r;
+  body.models = m ? m.split(',').map(s => s.trim()).filter(s => s) : [];
+  try { await api('PUT', '/upstreams/' + id, body); msg('已更新', true); closeEditModal(); loadUpstreams(); }
+  catch(e) { msg(e.message, false); }
+}
+async function probeUp(id) {
+  probeTargets = [upstreams.find(u => u.id === id)].filter(Boolean);
+  if (!probeTargets.length) return;
+  openProbeModal();
+}
+async function batchProbe() {
+  probeTargets = [...upstreams];
+  if (!probeTargets.length) { msg('没有上游', false); return; }
+  openProbeModal();
+}
+
+let probeTargets = [];
+let probeIdx = 0;
+
+function openProbeModal() {
+  probeIdx = 0;
+  document.getElementById('probe-mask').style.display = 'block';
+  document.getElementById('probe-modal').style.display = 'block';
+  document.getElementById('probe-log').style.display = 'none';
+  document.getElementById('probe-log').innerHTML = '';
+  document.getElementById('probe-run-btn').textContent = '开始测试';
+  document.getElementById('probe-run-btn').disabled = false;
+  document.getElementById('probe-title').textContent = probeTargets.length > 1 ? `批量测试 (${probeTargets.length} 个)` : '测试账号连接';
+  renderProbeInfo();
+}
+function closeProbeModal() {
+  document.getElementById('probe-mask').style.display = 'none';
+  document.getElementById('probe-modal').style.display = 'none';
+}
+function renderProbeInfo() {
+  const area = document.getElementById('probe-info-area');
+  area.innerHTML = probeTargets.map(u => {
+    const rs = u.runtime_status || (u.status === 'active' ? 'normal' : u.status);
+    const scMap2 = { normal: 'status-active', faulted: 'status-faulted', cooldown: 'status-cooldown', half_open: 'status-halfopen', disabled: 'status-disabled' };
+    const labelMap2 = { normal: '正常', faulted: '故障', cooldown: '冷却中', half_open: '半开', disabled: '禁用' };
+    const sc = scMap2[rs] || 'status-disabled';
+    const sl = labelMap2[rs] || rs;
+    return `<div class="probe-info" id="probe-card-${u.id}">
+      <div class="icon">&#9654;</div>
+      <div class="detail">
+        <div class="url">${u.api}</div>
+        <div class="meta">${u.remark || '-'}</div>
+      </div>
+      <span class="st ${sc}">${sl}</span>
+    </div>`;
+  }).join('');
+}
+
+function plog(html) {
+  const log = document.getElementById('probe-log');
+  log.style.display = 'block';
+  log.innerHTML += html + '\n';
+  log.scrollTop = log.scrollHeight;
+}
+
+async function runProbe() {
+  const btn = document.getElementById('probe-run-btn');
+  btn.disabled = true;
+  btn.textContent = '测试中...';
+  const log = document.getElementById('probe-log');
+  log.style.display = 'block';
+  log.innerHTML = '';
+
+  const model = document.getElementById('probe-model').value;
+
+  for (let i = 0; i < probeTargets.length; i++) {
+    const u = probeTargets[i];
+    if (probeTargets.length > 1) {
+      if (i > 0) plog('<hr>');
+      plog(`<span class="y">[${i+1}/${probeTargets.length}]</span> 测试: <span class="c">${u.remark || u.api}</span>`);
+    }
+    plog(`<span class="g">开始测试账号：</span>\n<span class="c">${u.api}</span>`);
+    plog(`<span class="d">账号类型：apikey</span>`);
+
+    try {
+      plog(`<span class="g">已连接到 API</span>`);
+      plog(`<span class="g">使用模型：</span><span class="c">${model}</span>`);
+      plog(`<span class="d">发送测试消息："hi"</span>`);
+
+      const r = await api('POST', '/upstreams/' + u.id + '/probe', { model });
+      const d = r.data;
+
+      if (d.healthy && d.reply) {
+        plog(`<span class="g">响应：</span>\n${escHtml(d.reply)}`);
+        plog(`<hr><span class="probe-ok">&#10004; 测试完成！</span>`);
+      } else if (d.healthy) {
+        plog(`<span class="g">HTTP ${d.status_code}</span>`);
+        plog(`<hr><span class="probe-ok">&#10004; 连接正常 (无文本回复)</span>`);
+      } else {
+        plog(`<span class="r">HTTP ${d.status_code}</span>`);
+        if (d.error) plog(`<span class="r">错误：${escHtml(d.error)}</span>`);
+        if (d.body) plog(`<span class="d">${escHtml(d.body.substring(0,500))}</span>`);
+        plog(`<hr><span class="probe-fail">&#10008; 测试失败</span>`);
+      }
+    } catch(e) {
+      plog(`<span class="r">请求异常：${escHtml(e.message)}</span>`);
+      plog(`<hr><span class="probe-fail">&#10008; 测试失败</span>`);
+    }
+  }
+
+  btn.textContent = '重试';
+  btn.disabled = false;
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// Health Check
+async function loadHealthCheck() {
+  const r = await api('GET', '/health-check');
+  const hc = r.data;
+  document.getElementById('hc-enabled').checked = hc.enabled;
+  document.getElementById('hc-interval').value = hc.interval_s || 60;
+  document.getElementById('hc-retries').value = hc.retries || 3;
+  document.getElementById('hc-timeout').value = hc.timeout_s || 10;
+  document.getElementById('hc-headers').value = hc.headers ? JSON.stringify(hc.headers, null, 2) : '';
+  document.getElementById('hc-body').value = hc.body || '';
+  await loadProbeModels();
+  renderGroupHealthCheck();
+  loadHistory();
+}
+function renderGroupHealthCheck() {
+  const container = document.getElementById('hc-groups');
+  container.innerHTML = groups.map(g => {
+    const hc = g.health_check || {};
+    const hasConfig = !!g.health_check;
+    return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="font-weight:600">${g.name}</span>
+        ${hasConfig ? '<span style="font-size:12px;color:#388e3c;background:#e8f5e9;padding:2px 8px;border-radius:4px">独立配置</span>' : '<span style="font-size:12px;color:#999;background:#f1f5f9;padding:2px 8px;border-radius:4px">使用全局</span>'}
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label style="min-width:auto;font-size:13px">启用</label><input type="checkbox" id="ghc-en-${g.id}" ${(hasConfig ? hc.enabled : false) ? 'checked' : ''}>
+        <label style="min-width:auto;font-size:13px">间隔</label><input type="number" id="ghc-int-${g.id}" value="${hc.interval_s || ''}" placeholder="全局" style="width:60px;padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px">
+        <label style="min-width:auto;font-size:13px">重试</label><input type="number" id="ghc-ret-${g.id}" value="${hc.retries || ''}" placeholder="全局" style="width:50px;padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px">
+        <label style="min-width:auto;font-size:13px">超时</label><input type="number" id="ghc-to-${g.id}" value="${hc.timeout_s || ''}" placeholder="全局" style="width:50px;padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px">
+        <button class="btn btn-primary btn-sm" onclick="saveGroupHC('${g.id}','${g.name}')">保存</button>
+        ${hasConfig ? `<button class="btn btn-sm" onclick="clearGroupHC('${g.id}','${g.name}')" style="font-size:12px;color:#999">恢复全局</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+  // 更新历史筛选下拉
+  const sel = document.getElementById('hc-hist-filter');
+  const val = sel.value;
+  sel.innerHTML = '<option value="">全部上游</option>' + upstreams.map(u => `<option value="${u.id}">${u.remark || u.api}</option>`).join('');
+  sel.value = val;
+}
+async function saveGroupHC(gid, name) {
+  const en = document.getElementById('ghc-en-' + gid).checked;
+  const intv = document.getElementById('ghc-int-' + gid).value;
+  const ret = document.getElementById('ghc-ret-' + gid).value;
+  const to = document.getElementById('ghc-to-' + gid).value;
+  // 如果所有字段都为空且未勾选启用，则清空分组配置
+  if (!en && !intv && !ret && !to) {
+    return clearGroupHC(gid, name);
+  }
+  const g = groups.find(g => g.id === gid);
+  const hc = { enabled: en, interval_s: parseInt(intv) || 60, retries: parseInt(ret) || 3, timeout_s: parseInt(to) || 10 };
+  try {
+    await api('PUT', '/groups/' + gid, { name, failover_rules: g.failover_rules || [], health_check: hc });
+    msg('分组健康检查配置已保存', true); loadGroups();
+  } catch(e) { msg(e.message, false); }
+}
+async function clearGroupHC(gid, name) {
+  const g = groups.find(g => g.id === gid);
+  try {
+    await api('PUT', '/groups/' + gid, { name, failover_rules: g.failover_rules || [], health_check: null });
+    msg('已恢复全局配置', true); loadGroups();
+  } catch(e) { msg(e.message, false); }
+}
+async function loadHistory() {
+  const uid = document.getElementById('hc-hist-filter').value;
+  const r = await api('GET', '/health-check/history' + (uid ? '?upstream_id=' + uid : ''));
+  const list = r.data || [];
+  const tbody = document.getElementById('hc-hist-list');
+  if (list.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;padding:20px">暂无记录</td></tr>';
+    return;
+  }
+  tbody.innerHTML = list.map(e => {
+    const t = new Date(e.checked_at * 1000).toLocaleString();
+    const gn = groupName(e.group_id);
+    return `<tr>
+      <td style="font-size:12px;white-space:nowrap">${t}</td>
+      <td>${e.remark || e.upstream_id.substring(0,8)}</td>
+      <td>${gn}</td>
+      <td class="${e.healthy ? 'status-active' : 'status-faulted'}">${e.healthy ? '健康' : '异常'}</td>
+      <td>${e.status_code || '-'}</td>
+      <td style="font-size:12px;color:#666">${e.error || '-'}</td>
+    </tr>`;
+  }).join('');
+}
+async function saveHealthCheck() {
+  let headers = {};
+  const hv = document.getElementById('hc-headers').value.trim();
+  if (hv) { try { headers = JSON.parse(hv); } catch(e) { msg('Headers JSON 格式错误', false); return; } }
+  const body = {
+    enabled: document.getElementById('hc-enabled').checked,
+    interval_s: parseInt(document.getElementById('hc-interval').value) || 60,
+    retries: parseInt(document.getElementById('hc-retries').value) || 3,
+    timeout_s: parseInt(document.getElementById('hc-timeout').value) || 10,
+    headers: headers,
+    body: document.getElementById('hc-body').value.trim()
+  };
+  try { await api('PUT', '/health-check', body); msg('全局健康检查配置已保存', true); }
+  catch(e) { msg(e.message, false); }
+}
+
+// Probe Models
+let probeModels = [];
+let defaultProbeModel = 'claude-sonnet-4-6';
+async function loadProbeModels() {
+  const r = await api('GET', '/probe-models');
+  const d = r.data || {};
+  probeModels = d.models || ['claude-sonnet-4-6'];
+  defaultProbeModel = d.default_model || probeModels[0] || 'claude-sonnet-4-6';
+  renderProbeModels();
+  updateProbeModelSelect();
+}
+function renderProbeModels() {
+  // 默认模型下拉
+  const sel = document.getElementById('pm-default');
+  sel.innerHTML = probeModels.map(m => `<option value="${m}" ${m === defaultProbeModel ? 'selected' : ''}>${m}</option>`).join('');
+  // 模型标签列表
+  const container = document.getElementById('pm-list');
+  if (probeModels.length === 0) {
+    container.innerHTML = '<span style="color:#999;font-size:13px">未配置</span>';
+    return;
+  }
+  container.innerHTML = probeModels.map((m, i) => {
+    const isDef = m === defaultProbeModel;
+    return `<span style="display:inline-flex;align-items:center;gap:4px;background:${isDef ? '#e3f2fd' : '#f1f5f9'};border:1px solid ${isDef ? '#90caf9' : '#e2e8f0'};border-radius:4px;padding:4px 8px;font-family:monospace;font-size:13px">${m}${isDef ? ' <span style="color:#1565c0;font-size:11px">(默认)</span>' : ''}<span style="cursor:pointer;color:#999;font-size:16px;line-height:1" onclick="delProbeModel(${i})">&times;</span></span>`;
+  }).join('');
+}
+function updateProbeModelSelect() {
+  const sel = document.getElementById('probe-model');
+  if (!sel) return;
+  sel.innerHTML = probeModels.map(m => `<option value="${m}">${m}</option>`).join('');
+}
+async function addProbeModel() {
+  const input = document.getElementById('pm-input');
+  const val = input.value.trim();
+  if (!val) return;
+  if (probeModels.includes(val)) { msg('已存在', false); return; }
+  probeModels.push(val);
+  await saveProbeModels();
+  input.value = '';
+}
+async function delProbeModel(idx) {
+  const removed = probeModels[idx];
+  probeModels.splice(idx, 1);
+  if (defaultProbeModel === removed && probeModels.length > 0) {
+    defaultProbeModel = probeModels[0];
+  }
+  await saveProbeModels();
+}
+async function saveProbeModels() {
+  defaultProbeModel = document.getElementById('pm-default').value || defaultProbeModel;
+  try {
+    await api('PUT', '/probe-models', { models: probeModels, default_model: defaultProbeModel });
+    msg('测活模型配置已保存', true);
+    renderProbeModels();
+    updateProbeModelSelect();
+  } catch(e) { msg(e.message, false); }
+}
+
+// Error Mappings
+async function loadErrorMappings() {
+  const r = await api('GET', '/error-mappings');
+  errorMappings = r.data || [];
+  renderErrorMappings();
+}
+function renderErrorMappings() {
+  const tbody = document.getElementById('em-list');
+  tbody.innerHTML = errorMappings.map((m, i) => `<tr>
+    <td>${m.source_code}</td>
+    <td>${m.target_code}</td>
+    <td>${m.message || '-'}</td>
+    <td><button class="btn btn-danger btn-sm" onclick="delErrorMapping(${i})">删除</button></td>
+  </tr>`).join('');
+}
+async function addErrorMapping() {
+  const src = parseInt(document.getElementById('em-src').value);
+  const tgt = parseInt(document.getElementById('em-tgt').value);
+  const m = document.getElementById('em-msg').value.trim();
+  if (!src || !tgt) { msg('请填写状态码', false); return; }
+  errorMappings.push({ source_code: src, target_code: tgt, message: m });
+  try { await api('PUT', '/error-mappings', errorMappings); msg('已保存', true); renderErrorMappings();
+    document.getElementById('em-src').value = ''; document.getElementById('em-tgt').value = ''; document.getElementById('em-msg').value = '';
+  } catch(e) { msg(e.message, false); }
+}
+async function delErrorMapping(idx) {
+  errorMappings.splice(idx, 1);
+  try { await api('PUT', '/error-mappings', errorMappings); msg('已删除', true); renderErrorMappings(); }
+  catch(e) { msg(e.message, false); }
+}
+
+// Strip Fields
+let stripFields = [];
+async function loadStripFields() {
+  const r = await api('GET', '/strip-fields');
+  stripFields = r.data || [];
+  renderStripFields();
+}
+function renderStripFields() {
+  const container = document.getElementById('sf-list');
+  if (stripFields.length === 0) {
+    container.innerHTML = '<span style="color:#999;font-size:13px">未配置，所有字段原样转发</span>';
+    return;
+  }
+  container.innerHTML = stripFields.map((f, i) => `<span style="display:inline-flex;align-items:center;gap:4px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:4px;padding:4px 8px;font-family:monospace;font-size:13px">${f}<span style="cursor:pointer;color:#999;font-size:16px;line-height:1" onclick="delStripField(${i})">&times;</span></span>`).join('');
+}
+async function addStripField() {
+  const input = document.getElementById('sf-input');
+  const val = input.value.trim();
+  if (!val) return;
+  if (stripFields.includes(val)) { msg('已存在', false); return; }
+  stripFields.push(val);
+  try { await api('PUT', '/strip-fields', stripFields); input.value = ''; msg('已添加', true); renderStripFields(); }
+  catch(e) { stripFields.pop(); msg(e.message, false); }
+}
+async function delStripField(idx) {
+  const removed = stripFields.splice(idx, 1);
+  try { await api('PUT', '/strip-fields', stripFields); msg('已删除', true); renderStripFields(); }
+  catch(e) { stripFields.splice(idx, 0, ...removed); msg(e.message, false); }
+}
+
+// Sessions
+async function loadSessions() {
+  const r = await api('GET', '/sessions');
+  const list = r.data || [];
+  const tbody = document.getElementById('sess-list');
+  if (list.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#999;padding:20px">暂无会话绑定</td></tr>';
+    return;
+  }
+  const now = Date.now() / 1000;
+  const ttl = 300; // 5 minutes
+  tbody.innerHTML = list.sort((a, b) => b.accessed_at - a.accessed_at).map(s => {
+    const t = new Date(s.accessed_at * 1000).toLocaleString();
+    const u = upstreams.find(u => u.id === s.upstream_id);
+    const uLabel = u ? (u.remark || u.api) : s.upstream_id.substring(0, 8);
+    const remain = Math.max(0, Math.round(s.accessed_at + ttl - now));
+    const key = s.session_key.length > 32 ? s.session_key.substring(0, 32) + '...' : s.session_key;
+    return `<tr>
+      <td style="font-size:13px;font-family:monospace" title="${s.session_key}">${key}</td>
+      <td>${uLabel}</td>
+      <td style="font-size:12px">${t}</td>
+      <td style="font-size:12px;color:${remain < 60 ? '#e65100' : '#666'}">${remain}s</td>
+    </tr>`;
+  }).join('');
+}
+
+// Request Logs
+let reqLogs = [];
+async function loadReqLogs() {
+  const r = await api('GET', '/request-logs');
+  reqLogs = r.data || [];
+  renderReqLogs();
+}
+function renderReqLogs() {
+  const filter = document.getElementById('rl-filter').value;
+  let list = reqLogs;
+  if (filter) list = list.filter(e => e.action === filter);
+  const tbody = document.getElementById('rl-list');
+  if (list.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;padding:20px">暂无记录</td></tr>';
+    return;
+  }
+  tbody.innerHTML = list.map((e, idx) => {
+    const t = new Date(e.time * 1000).toLocaleString();
+    const actionMap = { success: '成功', failover: '故障转移', error: '错误' };
+    const actionColor = { success: '#388e3c', failover: '#e65100', error: '#d32f2f' };
+    const detail = e.detail || '-';
+    const hasDetail = detail.length > 30;
+    const shortDetail = hasDetail ? detail.substring(0, 60) + '...' : detail;
+    return `<tr>
+      <td style="font-size:12px">${t}</td>
+      <td>${e.group_name || '-'}</td>
+      <td style="font-size:12px;font-family:monospace">${e.model || '-'}</td>
+      <td>${e.remark || (e.upstream_id ? e.upstream_id.substring(0,8) : '-')}</td>
+      <td>${e.status || '-'}</td>
+      <td style="font-size:12px">${e.duration_ms}ms</td>
+      <td style="color:${actionColor[e.action]||'#666'};font-weight:bold;font-size:13px">${actionMap[e.action]||e.action}</td>
+      <td style="font-size:12px;color:#666">${hasDetail ? `<span style="cursor:pointer;text-decoration:underline dotted" onclick="showLogDetail(${idx})">${shortDetail}</span>` : detail}</td>
+    </tr>`;
+  }).join('');
+}
+function showLogDetail(idx) {
+  const filter = document.getElementById('rl-filter').value;
+  let list = reqLogs;
+  if (filter) list = list.filter(e => e.action === filter);
+  const e = list[idx];
+  if (!e) return;
+  const t = new Date(e.time * 1000).toLocaleString();
+  const actionMap = { success: '成功', failover: '故障转移', error: '错误' };
+  let html = `<div style="font-size:13px;line-height:2">
+    <b>时间：</b>${t}<br>
+    <b>分组：</b>${e.group_name || '-'}<br>
+    <b>模型：</b><code>${e.model || '-'}</code><br>
+    <b>上游：</b>${e.remark || '-'} <span style="color:#999">(${e.upstream_id || '-'})</span><br>
+    <b>客户端：</b>${e.client_ip || '-'}<br>
+    <b>会话：</b><code style="font-size:12px;word-break:break-all">${e.session_key || '-'}</code><br>
+    <b>状态码：</b>${e.status || '-'}<br>
+    <b>耗时：</b>${e.duration_ms}ms<br>
+    <b>结果：</b>${actionMap[e.action] || e.action}<br>
+  </div>`;
+  if (e.detail && e.detail !== '-') {
+    html += `<div style="margin-top:12px"><b>详情：</b></div>
+    <pre style="background:#1e1e2e;color:#cdd6f4;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${e.detail.replace(/</g,'&lt;')}</pre>`;
+  }
+  if (e.request_body) {
+    html += `<div style="margin-top:12px"><b>请求体：</b></div>
+    <pre style="background:#1e1e2e;color:#a6e3a1;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${e.request_body.replace(/</g,'&lt;')}</pre>`;
+  }
+  if (e.response_body) {
+    html += `<div style="margin-top:12px"><b>响应体：</b></div>
+    <pre style="background:#1e1e2e;color:#f38ba8;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${e.response_body.replace(/</g,'&lt;')}</pre>`;
+  }
+  document.getElementById('log-detail-content').innerHTML = html;
+  document.getElementById('log-detail-mask').style.display = 'block';
+  document.getElementById('log-detail-modal').style.display = 'block';
+}
+function closeLogDetail() {
+  document.getElementById('log-detail-mask').style.display = 'none';
+  document.getElementById('log-detail-modal').style.display = 'none';
+}
+
+// Init: 检查登录状态
+(async function() {
+  try {
+    await api('GET', '/groups');
+    showApp();
+  } catch(e) {
+    showLogin();
+  }
+})();
+</script>
+</body>
+</html>
