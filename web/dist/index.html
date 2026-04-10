@@ -444,7 +444,7 @@ async function delGroup(id) {
 }
 function copyKey(id) {
   const el = document.getElementById('gk-' + id);
-  if (el) { navigator.clipboard.writeText(el.textContent); msg('已复制', true); }
+  if (el) { copyText(el.textContent); }
 }
 async function regenKey(id) {
   if (!confirm('重新生成 API Key？旧 Key 将立即失效。')) return;
@@ -868,7 +868,24 @@ function escAttr(s) {
 }
 function copyFault(id) {
   const u = upstreams.find(u => u.id === id);
-  if (u && u.fault_reason) { navigator.clipboard.writeText(u.fault_reason); msg('已复制', true); }
+  if (u && u.fault_reason) { copyText(u.fault_reason); }
+}
+function copyText(text) {
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(() => msg('已复制', true)).catch(() => copyFallback(text));
+  } else {
+    copyFallback(text);
+  }
+}
+function copyFallback(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+  msg('已复制', true);
 }
 
 // Health Check
@@ -1138,8 +1155,8 @@ function renderReqLogs() {
     const actionMap = { success: '成功', failover: '故障转移', error: '错误' };
     const actionColor = { success: '#388e3c', failover: '#e65100', error: '#d32f2f' };
     const detail = e.detail || '-';
-    const hasDetail = detail.length > 30;
-    const shortDetail = hasDetail ? detail.substring(0, 60) + '...' : detail;
+    const hasExtra = detail.length > 30 || e.request_body || e.response_body;
+    const shortDetail = detail.length > 60 ? detail.substring(0, 60) + '...' : detail;
     return `<tr>
       <td style="font-size:12px">${t}</td>
       <td>${e.group_name || '-'}</td>
@@ -1148,7 +1165,7 @@ function renderReqLogs() {
       <td>${e.status || '-'}</td>
       <td style="font-size:12px">${e.duration_ms}ms</td>
       <td style="color:${actionColor[e.action]||'#666'};font-weight:bold;font-size:13px">${actionMap[e.action]||e.action}</td>
-      <td style="font-size:12px;color:#666">${hasDetail ? `<span style="cursor:pointer;text-decoration:underline dotted" onclick="showLogDetail(${idx})">${shortDetail}</span>` : detail}</td>
+      <td style="font-size:12px;color:#666">${hasExtra ? `<span style="cursor:pointer;text-decoration:underline dotted" onclick="showLogDetail(${idx})">${shortDetail}</span>` : detail}</td>
     </tr>`;
   }).join('');
 }

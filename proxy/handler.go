@@ -391,7 +391,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			if c.Request.Context().Err() != nil {
 				return
 			}
-			h.markFault(upstream.ID, fmt.Sprintf("连接错误: %v", err))
+			// 连接错误仅 failover，不标记故障（可能是临时网络抖动），由健康检查判断是否真正离线
 			continue
 		}
 
