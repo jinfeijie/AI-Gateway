@@ -122,7 +122,19 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
     <select id="u-filter" onchange="loadUpstreams()"><option value="">全部</option></select>
     <button class="btn btn-primary" onclick="batchProbe()" id="batch-probe-btn">批量测活</button>
   </div>
-  <table>
+  <table style="table-layout:fixed">
+    <colgroup>
+      <col style="width:8%">
+      <col style="width:15%">
+      <col style="width:7%">
+      <col style="width:10%">
+      <col style="width:7%">
+      <col style="width:5%">
+      <col style="width:7%">
+      <col style="width:7%">
+      <col style="width:18%">
+      <col style="width:16%">
+    </colgroup>
     <thead><tr><th>备注</th><th>API</th><th>分组</th><th>模型</th><th>状态</th><th>延迟</th><th>今日花费</th><th>总花费</th><th>故障信息</th><th>操作</th></tr></thead>
     <tbody id="u-list"></tbody>
     <tfoot id="u-foot"></tfoot>
@@ -633,8 +645,12 @@ async function loadUpstreams() {
     }
     let fault = '-';
     if (u.faulted_at) {
-      fault = `<span style="color:#d32f2f">${u.fault_type === 'manual' ? '手动' : '自动'}</span> @ ${new Date(u.faulted_at*1000).toLocaleString()}`;
-      if (u.fault_reason) fault += `<br><span style="color:#666">${u.fault_reason}</span>`;
+      fault = `<span style="color:#d32f2f">${u.fault_type === 'manual' ? '手动' : '自动'}</span><br>${new Date(u.faulted_at*1000).toLocaleString()}`;
+      if (u.fault_reason) {
+        const reason = u.fault_reason.length > 80 ? u.fault_reason.substring(0, 80) + '...' : u.fault_reason;
+        fault += `<br><span style="color:#666">${escHtml(reason)}</span>`;
+        fault += `<br><button class="btn btn-sm" style="margin-top:2px;padding:1px 6px;font-size:11px;background:#eee" onclick="copyFault('${u.id}')">复制</button>`;
+      }
     }
     const st = stats[u.id] || {};
     const latency = st.avg_latency_ms ? st.avg_latency_ms + 'ms' : '-';
@@ -642,14 +658,14 @@ async function loadUpstreams() {
     const totalCost = st.total_cost ? '$' + st.total_cost.toFixed(4) : '-';
     return `<tr>
       <td>${u.remark || '-'}</td>
-      <td style="font-size:13px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${u.api}">${u.api}</td>
+      <td style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(u.api)}">${escHtml(u.api)}</td>
       <td>${groupName(u.group_id)}</td>
-      <td style="font-size:11px;max-width:200px">${(u.models && u.models.length) ? u.models.map(m => '<span style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:3px;padding:1px 4px;font-family:monospace;margin:1px">' + m + '</span>').join(' ') : '<span style="color:#999">继承分组</span>'}</td>
+      <td style="font-size:11px;overflow:hidden">${(u.models && u.models.length) ? u.models.map(m => '<span style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:3px;padding:1px 4px;font-family:monospace;margin:1px">' + m + '</span>').join(' ') : '<span style="color:#999">继承分组</span>'}</td>
       <td class="${sc}">${statusLabel}${statusExtra}</td>
       <td style="font-size:12px;color:#1976d2">${latency}</td>
       <td style="font-size:12px;color:#388e3c;font-weight:500">${todayCost}</td>
       <td style="font-size:12px;color:#e65100;font-weight:500">${totalCost}</td>
-      <td style="font-size:12px;max-width:250px;white-space:normal;word-break:break-word">${fault}</td>
+      <td style="font-size:12px;white-space:normal;word-break:break-all;overflow:hidden">${fault}</td>
       <td class="actions">
         <button class="btn btn-primary btn-sm" onclick="editUp('${u.id}')">编辑</button>
         <button class="btn btn-sm" style="background:#607d8b;color:#fff" onclick="probeUp('${u.id}')">测活</button>
@@ -846,6 +862,13 @@ function escHtml(s) {
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
+}
+function escAttr(s) {
+  return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function copyFault(id) {
+  const u = upstreams.find(u => u.id === id);
+  if (u && u.fault_reason) { navigator.clipboard.writeText(u.fault_reason); msg('已复制', true); }
 }
 
 // Health Check
