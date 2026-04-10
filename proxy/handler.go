@@ -439,9 +439,9 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		statusCode, respBody := h.applyErrorMapping(statusCode, resp)
 
 		// 写响应并捕获 usage
-		usage := h.writeResponseWithUsage(c, statusCode, resp.Header, respBody)
+		usage, respBodyBytes := h.writeResponseWithUsage(c, statusCode, resp.Header, respBody)
 
-		h.addLog(RequestLog{
+		logEntry := RequestLog{
 			Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
 			SessionKey: sessionKey, ClientIP: c.ClientIP(), Model: reqModel,
 			UpstreamID: upstream.ID, Remark: upstream.Remark,
@@ -449,7 +449,15 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			Action: "success",
 			InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
 			CacheReadTokens: usage.CacheReadInputTokens, CacheWriteTokens: usage.CacheCreationInputTokens,
-		})
+		}
+		if statusCode >= 400 {
+			logEntry.Action = "error"
+			logEntry.Detail = fmt.Sprintf("HTTP %d", statusCode)
+			logEntry.RequestBody = truncateBody(body, maxLogBodySize)
+			logEntry.ResponseBody = truncateBody(respBodyBytes, maxLogBodySize)
+			log.Printf("[proxy] upstream %s (%s) returned %d (not in failover rules), body: %s", upstream.ID, upstream.Remark, statusCode, truncateBody(respBodyBytes, 512))
+		}
+		h.addLog(logEntry)
 		return
 	}
 
@@ -514,7 +522,7 @@ func (h *Handler) applyErrorMapping(statusCode int, resp *http.Response) (int, i
 	return statusCode, resp.Body
 }
 
-func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header http.Header, body io.ReadCloser) Usage {
+func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header http.Header, body io.ReadCloser) (Usage, []byte) {
 	defer body.Close()
 
 	for key, vals := range header {
@@ -525,6 +533,7 @@ func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header 
 	c.Writer.WriteHeader(statusCode)
 
 	var usage Usage
+	var captured []byte
 
 	if isSSE(header) {
 		// 流式：边写边扫描 usage
@@ -547,6 +556,7 @@ func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header 
 		// 非流式：读取全部，解析 usage，再写出
 		data, _ := io.ReadAll(body)
 		c.Writer.Write(data)
+		captured = data
 		var resp struct {
 			Usage Usage `json:"usage"`
 		}
@@ -554,7 +564,7 @@ func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header 
 			usage = resp.Usage
 		}
 	}
-	return usage
+	return usage, captured
 }
 
 // extractSSEUsage 从 SSE data 中提取 usage 信息
