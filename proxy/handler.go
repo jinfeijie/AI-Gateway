@@ -27,6 +27,7 @@ type RequestLog struct {
 	GroupName  string `json:"group_name"`
 	SessionKey string `json:"session_key"`
 	ClientIP   string `json:"client_ip"`
+	RequestID  string `json:"request_id,omitempty"`
 	UpstreamID string `json:"upstream_id"`
 	Remark     string `json:"remark"`
 	Status     int    `json:"status"`
@@ -343,11 +344,14 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		sessionKey = uid
 	}
 
+	// 提取上游请求 ID（用于关联 new-api 日志）
+	requestID := c.GetHeader("X-Request-Log-Id")
+
 	maxRetries := h.balancer.ActiveCount(group.ID)
 	if maxRetries == 0 {
 		h.addLog(RequestLog{
 			Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
-			SessionKey: sessionKey, ClientIP: c.ClientIP(), Model: reqModel,
+			SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
 			Status: 502, Duration: time.Since(startTime).Milliseconds(),
 			Action: "error", Detail: "no active upstream",
 		})
@@ -381,7 +385,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			log.Printf("[proxy] upstream %s (%s) request error: %v", upstream.ID, upstream.Remark, err)
 			h.addLog(RequestLog{
 				Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
-				SessionKey: sessionKey, ClientIP: c.ClientIP(), Model: reqModel,
+				SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
 				UpstreamID: upstream.ID, Remark: upstream.Remark,
 				Status: 0, Duration: time.Since(startTime).Milliseconds(),
 				Action: "failover", Detail: fmt.Sprintf("连接错误: %v", err),
@@ -425,7 +429,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			}
 			h.addLog(RequestLog{
 				Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
-				SessionKey: sessionKey, ClientIP: c.ClientIP(), Model: reqModel,
+				SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
 				UpstreamID: upstream.ID, Remark: upstream.Remark,
 				Status: statusCode, Duration: time.Since(startTime).Milliseconds(),
 				Action: "failover", Detail: detail,
@@ -443,7 +447,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 
 		logEntry := RequestLog{
 			Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
-			SessionKey: sessionKey, ClientIP: c.ClientIP(), Model: reqModel,
+			SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
 			UpstreamID: upstream.ID, Remark: upstream.Remark,
 			Status: statusCode, Duration: time.Since(startTime).Milliseconds(),
 			Action: "success",
@@ -463,7 +467,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 
 	h.addLog(RequestLog{
 		Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
-		SessionKey: sessionKey, ClientIP: c.ClientIP(), Model: reqModel,
+		SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
 		Status: 502, Duration: time.Since(startTime).Milliseconds(),
 		Action: "error", Detail: "all upstreams failed",
 	})

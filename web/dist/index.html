@@ -1176,6 +1176,7 @@ function showLogDetail(idx) {
     <b>模型：</b><code>${e.model || '-'}</code><br>
     <b>上游：</b>${e.remark || '-'} <span style="color:#999">(${e.upstream_id || '-'})</span><br>
     <b>客户端：</b>${e.client_ip || '-'}<br>
+    <b>请求ID：</b><code style="font-size:12px">${escHtml(e.request_id || '-')}</code><br>
     <b>会话：</b><code style="font-size:12px;word-break:break-all">${escHtml(e.session_key || '-')}</code><br>
     <b>状态码：</b>${e.status || '-'}<br>
     <b>耗时：</b>${e.duration_ms}ms<br>
