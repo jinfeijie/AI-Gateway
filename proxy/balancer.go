@@ -145,18 +145,29 @@ func (b *Balancer) SetCooldown(upstreamID string, d time.Duration) {
 func (b *Balancer) Pick(groupID string, sessionKey string, reqModel string, exclude map[string]bool) *model.Upstream {
 	cfg := b.store.Get()
 
-	// 查找分组模型列表
+	// 查找分组配置
 	var groupModels []string
+	var groupMaxConcurrency int
 	for _, g := range cfg.Groups {
 		if g.ID == groupID {
 			groupModels = g.Models
+			groupMaxConcurrency = g.MaxConcurrency
 			break
 		}
+	}
+
+	// 分组级并发限流
+	if groupMaxConcurrency > 0 && b.GroupLoad(groupID, cfg) >= int64(groupMaxConcurrency) {
+		return nil
 	}
 
 	var actives []model.Upstream
 	for _, u := range cfg.Upstreams {
 		if u.GroupID == groupID && (u.Status == "active" || u.Status == "half_open") && !exclude[u.ID] && !b.InCooldown(u.ID) {
+			// 并发限流：超过最大并发数时跳过
+			if u.MaxConcurrency > 0 && b.GetLoad(u.ID) >= int64(u.MaxConcurrency) {
+				continue
+			}
 			// 模型过滤：上游有配置用上游的，否则用分组的，都没有则不过滤
 			if reqModel != "" {
 				models := u.Models
@@ -239,6 +250,17 @@ func (b *Balancer) GetLoad(upstreamID string) int64 {
 		return atomic.LoadInt64(val.(*int64))
 	}
 	return 0
+}
+
+// GroupLoad 获取分组内所有上游的总并发数
+func (b *Balancer) GroupLoad(groupID string, cfg model.Config) int64 {
+	var total int64
+	for _, u := range cfg.Upstreams {
+		if u.GroupID == groupID {
+			total += b.GetLoad(u.ID)
+		}
+	}
+	return total
 }
 
 // SessionEntry 会话绑定信息（用于 API 返回）

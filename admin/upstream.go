@@ -58,11 +58,12 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 
 	r.POST("/upstreams", func(c *gin.Context) {
 		var req struct {
-			GroupID string   `json:"group_id" binding:"required"`
-			API     string   `json:"api" binding:"required"`
-			APIKey  string   `json:"api_key" binding:"required"`
-			Remark  string   `json:"remark"`
-			Models  []string `json:"models"`
+			GroupID        string   `json:"group_id" binding:"required"`
+			API            string   `json:"api" binding:"required"`
+			APIKey         string   `json:"api_key" binding:"required"`
+			Remark         string   `json:"remark"`
+			Models         []string `json:"models"`
+			MaxConcurrency int      `json:"max_concurrency"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -82,13 +83,14 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 			return
 		}
 		u := model.Upstream{
-			ID:      uuid.New().String(),
-			GroupID: req.GroupID,
-			API:     req.API,
-			APIKey:  req.APIKey,
-			Models:  req.Models,
-			Remark:  req.Remark,
-			Status:  "active",
+			ID:             uuid.New().String(),
+			GroupID:        req.GroupID,
+			API:            req.API,
+			APIKey:         req.APIKey,
+			Models:         req.Models,
+			MaxConcurrency: req.MaxConcurrency,
+			Remark:         req.Remark,
+			Status:         "active",
 		}
 		if err := s.Update(func(cfg *model.Config) {
 			cfg.Upstreams = append(cfg.Upstreams, u)
@@ -102,10 +104,11 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 	r.PUT("/upstreams/:id", func(c *gin.Context) {
 		id := c.Param("id")
 		var req struct {
-			API    string   `json:"api"`
-			APIKey string   `json:"api_key"`
-			Remark string   `json:"remark"`
-			Models *[]string `json:"models"` // 指针区分未传和空数组
+			API            string    `json:"api"`
+			APIKey         string    `json:"api_key"`
+			Remark         string    `json:"remark"`
+			Models         *[]string `json:"models"`          // 指针区分未传和空数组
+			MaxConcurrency *int      `json:"max_concurrency"` // 指针区分未传和传 0
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -124,6 +127,9 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 					cfg.Upstreams[i].Remark = req.Remark
 					if req.Models != nil {
 						cfg.Upstreams[i].Models = *req.Models
+					}
+					if req.MaxConcurrency != nil {
+						cfg.Upstreams[i].MaxConcurrency = *req.MaxConcurrency
 					}
 					found = true
 					return
@@ -227,5 +233,10 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 	r.GET("/stats", func(c *gin.Context) {
 		cfg := s.Get()
 		c.JSON(http.StatusOK, gin.H{"data": bq.DailyStats(cfg.ModelPricing)})
+	})
+
+	// 当前并发数
+	r.GET("/concurrency", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"data": bq.LoadInfo()})
 	})
 }

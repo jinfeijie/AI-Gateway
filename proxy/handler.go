@@ -32,6 +32,7 @@ type RequestLog struct {
 	Remark     string `json:"remark"`
 	Status     int    `json:"status"`
 	Duration   int64  `json:"duration_ms"`
+	TTFBMs     int64  `json:"ttfb_ms,omitempty"`
 	Action     string `json:"action"` // success / failover / error
 	Detail     string `json:"detail,omitempty"`
 	Model      string `json:"model,omitempty"`
@@ -71,6 +72,23 @@ type Handler struct {
 	logs    []RequestLog
 	logsMu  sync.RWMutex
 	logFile *os.File // 日志持久化文件
+
+	siteStats     SiteStats
+	siteStatsMu   sync.Mutex
+	siteStatsPath string
+
+	upstreamStats     map[string]*UpstreamAccum // 上游独立累计
+	upstreamStatsMu   sync.Mutex
+	upstreamStatsPath string
+}
+
+// UpstreamAccum 单个上游的持久化累计数据
+type UpstreamAccum struct {
+	TodayDate     string  `json:"today_date"`
+	TodayCost     float64 `json:"today_cost"`
+	TodayRequests int     `json:"today_requests"`
+	TotalCost     float64 `json:"total_cost"`
+	TotalRequests int     `json:"total_requests"`
 }
 
 func (h *Handler) addLog(entry RequestLog) {
@@ -111,11 +129,13 @@ func (h *Handler) RequestLogsRaw() []any {
 
 // UpstreamStats 单个上游的统计数据
 type UpstreamStats struct {
-	UpstreamID   string  `json:"upstream_id"`
-	RequestCount int     `json:"request_count"`
-	AvgLatency   int64   `json:"avg_latency_ms"`
-	TodayCost    float64 `json:"today_cost"`
-	TotalCost    float64 `json:"total_cost"`
+	UpstreamID        string  `json:"upstream_id"`
+	RequestCount      int     `json:"request_count"`
+	TodayRequestCount int     `json:"today_request_count"`
+	AvgLatency        int64   `json:"avg_latency_ms"`
+	AvgTTFB           int64   `json:"avg_ttfb_ms"`
+	TodayCost         float64 `json:"today_cost"`
+	TotalCost         float64 `json:"total_cost"`
 }
 
 // GroupStats 单个分组的统计数据
@@ -125,10 +145,20 @@ type GroupStats struct {
 	TotalCost float64 `json:"total_cost"`
 }
 
+// SiteStats 全站独立累计统计（不依赖上游列表）
+type SiteStats struct {
+	TodayDate     string  `json:"today_date"`
+	TodayCost     float64 `json:"today_cost"`
+	TodayRequests int     `json:"today_requests"`
+	TotalCost     float64 `json:"total_cost"`
+	TotalRequests int     `json:"total_requests"`
+}
+
 // StatsResponse 统计响应
 type StatsResponse struct {
 	Upstreams map[string]UpstreamStats `json:"upstreams"`
 	Groups    map[string]GroupStats    `json:"groups"`
+	Site      SiteStats               `json:"site"`
 }
 
 func calcCost(log RequestLog, pricingMap map[string]model.ModelPricing) float64 {
@@ -142,90 +172,103 @@ func calcCost(log RequestLog, pricingMap map[string]model.ModelPricing) float64 
 		float64(log.CacheWriteTokens)*p.CacheWrite) / 1_000_000
 }
 
-// DailyStats 从内存日志中聚合统计数据
+// DailyStats 统计数据：花费/请求数从持久化文件读，延迟从近期日志算
 func (h *Handler) DailyStats(pricing []model.ModelPricing) any {
-	pricingMap := make(map[string]model.ModelPricing, len(pricing))
-	for _, p := range pricing {
-		pricingMap[p.Model] = p
-	}
-
 	now := time.Now()
-	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
+	today := now.Format("2006-01-02")
 
+	// 从日志算延迟（反映近期性能）
 	h.logsMu.RLock()
 	logs := make([]RequestLog, len(h.logs))
 	copy(logs, h.logs)
 	h.logsMu.RUnlock()
 
-	type upAcc struct {
-		count      int
-		totalMs    int64
-		todayCost  float64
-		totalCost  float64
+	type latencyAcc struct {
+		count     int
+		totalMs   int64
+		totalTTFB int64
 	}
-	type grpAcc struct {
-		todayCost float64
-		totalCost float64
-	}
-
-	upMap := make(map[string]*upAcc)
-	grpMap := make(map[string]*grpAcc)
-
+	latMap := make(map[string]*latencyAcc)
 	for _, l := range logs {
 		if l.Action != "success" || l.UpstreamID == "" {
 			continue
 		}
-		cost := calcCost(l, pricingMap)
-
-		// upstream 聚合
-		ua, ok := upMap[l.UpstreamID]
+		la, ok := latMap[l.UpstreamID]
 		if !ok {
-			ua = &upAcc{}
-			upMap[l.UpstreamID] = ua
+			la = &latencyAcc{}
+			latMap[l.UpstreamID] = la
 		}
-		ua.count++
-		ua.totalMs += l.Duration
-		ua.totalCost += cost
-		if l.Time >= todayStart {
-			ua.todayCost += cost
-		}
-
-		// group 聚合
-		ga, ok := grpMap[l.GroupID]
-		if !ok {
-			ga = &grpAcc{}
-			grpMap[l.GroupID] = ga
-		}
-		ga.totalCost += cost
-		if l.Time >= todayStart {
-			ga.todayCost += cost
-		}
+		la.count++
+		la.totalMs += l.Duration
+		la.totalTTFB += l.TTFBMs
 	}
+
+	// 从持久化文件读花费/请求数
+	h.upstreamStatsMu.Lock()
+	upSnap := make(map[string]UpstreamAccum, len(h.upstreamStats))
+	for id, acc := range h.upstreamStats {
+		upSnap[id] = *acc
+	}
+	h.upstreamStatsMu.Unlock()
 
 	resp := StatsResponse{
-		Upstreams: make(map[string]UpstreamStats, len(upMap)),
-		Groups:    make(map[string]GroupStats, len(grpMap)),
+		Upstreams: make(map[string]UpstreamStats),
+		Groups:    make(map[string]GroupStats),
 	}
-	for id, a := range upMap {
+
+	// 合并：所有有持久化记录的上游都出现
+	for id, acc := range upSnap {
 		avg := int64(0)
-		if a.count > 0 {
-			avg = a.totalMs / int64(a.count)
+		avgTTFB := int64(0)
+		if la, ok := latMap[id]; ok && la.count > 0 {
+			avg = la.totalMs / int64(la.count)
+			avgTTFB = la.totalTTFB / int64(la.count)
+		}
+		todayCost := acc.TodayCost
+		todayReqs := acc.TodayRequests
+		if acc.TodayDate != today {
+			todayCost = 0
+			todayReqs = 0
 		}
 		resp.Upstreams[id] = UpstreamStats{
-			UpstreamID:   id,
-			RequestCount: a.count,
-			AvgLatency:   avg,
-			TodayCost:    a.todayCost,
-			TotalCost:    a.totalCost,
+			UpstreamID:        id,
+			RequestCount:      acc.TotalRequests,
+			TodayRequestCount: todayReqs,
+			AvgLatency:        avg,
+			AvgTTFB:           avgTTFB,
+			TodayCost:         todayCost,
+			TotalCost:         acc.TotalCost,
 		}
 	}
-	for id, a := range grpMap {
-		resp.Groups[id] = GroupStats{
-			GroupID:   id,
-			TodayCost: a.todayCost,
-			TotalCost: a.totalCost,
-		}
+
+	// 分组统计：按上游所属分组聚合
+	cfg := h.store.Get()
+	upGroupMap := make(map[string]string)
+	for _, u := range cfg.Upstreams {
+		upGroupMap[u.ID] = u.GroupID
 	}
+	for id, st := range resp.Upstreams {
+		gid := upGroupMap[id]
+		if gid == "" {
+			continue
+		}
+		ga := resp.Groups[gid]
+		ga.GroupID = gid
+		ga.TodayCost += st.TodayCost
+		ga.TotalCost += st.TotalCost
+		resp.Groups[gid] = ga
+	}
+
+	// 全站独立统计
+	h.siteStatsMu.Lock()
+	site := h.siteStats
+	if site.TodayDate != today {
+		site.TodayCost = 0
+		site.TodayRequests = 0
+	}
+	h.siteStatsMu.Unlock()
+	resp.Site = site
+
 	return resp
 }
 
@@ -249,6 +292,12 @@ func NewHandler(s *store.Store, dataPath string) *Handler {
 	} else {
 		h.logFile = f
 	}
+	// 全站统计持久化
+	h.siteStatsPath = filepath.Join(filepath.Dir(dataPath), "site_stats.json")
+	h.loadSiteStats()
+	// 上游统计持久化
+	h.upstreamStatsPath = filepath.Join(filepath.Dir(dataPath), "upstream_stats.json")
+	h.loadUpstreamStats()
 	return h
 }
 
@@ -275,6 +324,129 @@ func (h *Handler) loadLogs(path string) {
 	}
 }
 
+func (h *Handler) loadSiteStats() {
+	data, err := os.ReadFile(h.siteStatsPath)
+	if err == nil {
+		h.siteStatsMu.Lock()
+		json.Unmarshal(data, &h.siteStats)
+		h.siteStatsMu.Unlock()
+		return
+	}
+	// 文件不存在，从现有日志回填
+	pm := h.pricingMap()
+	today := time.Now().Format("2006-01-02")
+	h.siteStatsMu.Lock()
+	defer h.siteStatsMu.Unlock()
+	h.siteStats.TodayDate = today
+	for _, l := range h.logs {
+		if l.Action != "success" || l.UpstreamID == "" {
+			continue
+		}
+		cost := calcCost(l, pm)
+		h.siteStats.TotalCost += cost
+		h.siteStats.TotalRequests++
+		if time.Unix(l.Time, 0).Format("2006-01-02") == today {
+			h.siteStats.TodayCost += cost
+			h.siteStats.TodayRequests++
+		}
+	}
+	h.saveSiteStats()
+	log.Printf("[proxy] initialized site stats from logs: total=$%.4f (%d reqs), today=$%.4f (%d reqs)",
+		h.siteStats.TotalCost, h.siteStats.TotalRequests, h.siteStats.TodayCost, h.siteStats.TodayRequests)
+}
+
+func (h *Handler) saveSiteStats() {
+	data, _ := json.Marshal(h.siteStats)
+	os.WriteFile(h.siteStatsPath, data, 0644)
+}
+
+func (h *Handler) addSiteCost(cost float64) {
+	h.siteStatsMu.Lock()
+	defer h.siteStatsMu.Unlock()
+	today := time.Now().Format("2006-01-02")
+	if h.siteStats.TodayDate != today {
+		h.siteStats.TodayDate = today
+		h.siteStats.TodayCost = 0
+		h.siteStats.TodayRequests = 0
+	}
+	h.siteStats.TodayCost += cost
+	h.siteStats.TodayRequests++
+	h.siteStats.TotalCost += cost
+	h.siteStats.TotalRequests++
+	h.saveSiteStats()
+}
+
+func (h *Handler) pricingMap() map[string]model.ModelPricing {
+	cfg := h.store.Get()
+	m := make(map[string]model.ModelPricing, len(cfg.ModelPricing))
+	for _, p := range cfg.ModelPricing {
+		m[p.Model] = p
+	}
+	return m
+}
+
+func (h *Handler) loadUpstreamStats() {
+	data, err := os.ReadFile(h.upstreamStatsPath)
+	if err == nil {
+		h.upstreamStatsMu.Lock()
+		h.upstreamStats = make(map[string]*UpstreamAccum)
+		json.Unmarshal(data, &h.upstreamStats)
+		h.upstreamStatsMu.Unlock()
+		return
+	}
+	// 文件不存在，从现有日志回填
+	pm := h.pricingMap()
+	today := time.Now().Format("2006-01-02")
+	h.upstreamStatsMu.Lock()
+	defer h.upstreamStatsMu.Unlock()
+	h.upstreamStats = make(map[string]*UpstreamAccum)
+	for _, l := range h.logs {
+		if l.Action != "success" || l.UpstreamID == "" {
+			continue
+		}
+		acc := h.upstreamStats[l.UpstreamID]
+		if acc == nil {
+			acc = &UpstreamAccum{TodayDate: today}
+			h.upstreamStats[l.UpstreamID] = acc
+		}
+		cost := calcCost(l, pm)
+		acc.TotalCost += cost
+		acc.TotalRequests++
+		if time.Unix(l.Time, 0).Format("2006-01-02") == today {
+			acc.TodayCost += cost
+			acc.TodayRequests++
+		}
+	}
+	h.saveUpstreamStats()
+	log.Printf("[proxy] initialized upstream stats from logs: %d upstreams", len(h.upstreamStats))
+}
+
+func (h *Handler) saveUpstreamStats() {
+	data, _ := json.Marshal(h.upstreamStats)
+	os.WriteFile(h.upstreamStatsPath, data, 0644)
+}
+
+func (h *Handler) addUpstreamCost(upstreamID string, cost float64) {
+	h.upstreamStatsMu.Lock()
+	defer h.upstreamStatsMu.Unlock()
+	acc := h.upstreamStats[upstreamID]
+	if acc == nil {
+		acc = &UpstreamAccum{}
+		h.upstreamStats[upstreamID] = acc
+	}
+	today := time.Now().Format("2006-01-02")
+	if acc.TodayDate != today {
+		acc.TodayDate = today
+		acc.TodayCost = 0
+		acc.TodayRequests = 0
+	}
+	acc.TodayCost += cost
+	acc.TodayRequests++
+	acc.TotalCost += cost
+	acc.TotalRequests++
+	h.saveUpstreamStats()
+}
+
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	r.POST("/v1/messages", h.proxyMessages)
 }
@@ -292,6 +464,16 @@ func (h *Handler) CooldownInfo() map[string]time.Time {
 // SessionInfo 转发到 Balancer
 func (h *Handler) SessionInfo() []any {
 	return h.balancer.SessionInfo()
+}
+
+// LoadInfo 返回所有上游的当前并发数
+func (h *Handler) LoadInfo() map[string]int64 {
+	cfg := h.store.Get()
+	result := make(map[string]int64)
+	for _, u := range cfg.Upstreams {
+		result[u.ID] = h.balancer.GetLoad(u.ID)
+	}
+	return result
 }
 
 func (h *Handler) proxyMessages(c *gin.Context) {
@@ -338,11 +520,8 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		body = stripFields(body, cfg.StripFields)
 	}
 
-	// 会话亲和 session key: 优先从 metadata.user_id 提取，回退用客户端 IP
-	sessionKey := c.ClientIP()
-	if uid := extractUserID(body); uid != "" {
-		sessionKey = uid
-	}
+	// 会话亲和 session key: 仅从 metadata.user_id 提取，无 user_id 时不做亲和
+	sessionKey := extractUserID(body)
 
 	// 提取上游请求 ID（用于关联 new-api 日志）
 	requestID := c.GetHeader("X-Request-Log-Id")
@@ -378,7 +557,9 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		excluded[upstream.ID] = true
 
 		h.balancer.IncLoad(upstream.ID)
+		attemptStart := time.Now()
 		resp, err := h.doRequest(c, upstream, body)
+		ttfb := time.Since(attemptStart).Milliseconds()
 		h.balancer.DecLoad(upstream.ID)
 
 		if err != nil {
@@ -449,7 +630,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
 			SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
 			UpstreamID: upstream.ID, Remark: upstream.Remark,
-			Status: statusCode, Duration: time.Since(startTime).Milliseconds(),
+			Status: statusCode, Duration: time.Since(startTime).Milliseconds(), TTFBMs: ttfb,
 			Action: "success",
 			InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
 			CacheReadTokens: usage.CacheReadInputTokens, CacheWriteTokens: usage.CacheCreationInputTokens,
@@ -462,6 +643,11 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			log.Printf("[proxy] upstream %s (%s) returned %d (not in failover rules), body: %s", upstream.ID, upstream.Remark, statusCode, truncateBody(respBodyBytes, 512))
 		}
 		h.addLog(logEntry)
+		if logEntry.Action == "success" {
+			cost := calcCost(logEntry, h.pricingMap())
+			h.addSiteCost(cost)
+			h.addUpstreamCost(upstream.ID, cost)
+		}
 		return
 	}
 

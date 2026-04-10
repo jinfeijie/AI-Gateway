@@ -46,10 +46,11 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 	r.PUT("/groups/:id", func(c *gin.Context) {
 		id := c.Param("id")
 		var req struct {
-			Name          string                  `json:"name" binding:"required"`
-			Models        []string                `json:"models"`
-			FailoverRules []model.FailoverRule     `json:"failover_rules"`
-			HealthCheck   *model.HealthCheckConfig `json:"health_check"`
+			Name           string                  `json:"name" binding:"required"`
+			Models         []string                `json:"models"`
+			MaxConcurrency *int                    `json:"max_concurrency"`
+			FailoverRules  []model.FailoverRule     `json:"failover_rules"`
+			HealthCheck    *model.HealthCheckConfig `json:"health_check"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -63,6 +64,9 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 					cfg.Groups[i].Models = req.Models
 					cfg.Groups[i].FailoverRules = req.FailoverRules
 					cfg.Groups[i].HealthCheck = req.HealthCheck
+					if req.MaxConcurrency != nil {
+						cfg.Groups[i].MaxConcurrency = *req.MaxConcurrency
+					}
 					found = true
 					return
 				}

@@ -22,6 +22,7 @@ type BalancerQuerier interface {
 	RequestLogs() []any
 	RequestLogsRaw() []any                    // 返回原始 RequestLog 用于统计
 	DailyStats(pricing []model.ModelPricing) any // 聚合统计
+	LoadInfo() map[string]int64               // 上游当前并发数
 }
 
 // sessionToken 根据用户名密码生成确定性 token，重启后仍然有效

@@ -92,6 +92,7 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
   <button class="tab" data-tab="failover" onclick="showTab('failover')">故障转移</button>
   <button class="tab" data-tab="errors" onclick="showTab('errors')">错误码映射</button>
   <button class="tab" data-tab="sessions" onclick="showTab('sessions')">会话亲和</button>
+  <button class="tab" data-tab="ratelimit" onclick="showTab('ratelimit')">限流配置</button>
   <button class="tab" data-tab="reqlog" onclick="showTab('reqlog')">请求日志</button>
 </div>
 <div id="msg"></div>
@@ -124,18 +125,20 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
   </div>
   <table style="table-layout:fixed">
     <colgroup>
-      <col style="width:8%">
-      <col style="width:15%">
-      <col style="width:7%">
       <col style="width:10%">
-      <col style="width:7%">
+      <col style="width:13%">
       <col style="width:5%">
       <col style="width:7%">
-      <col style="width:7%">
-      <col style="width:18%">
+      <col style="width:5%">
+      <col style="width:5%">
+      <col style="width:5%">
+      <col style="width:5%">
+      <col style="width:6%">
+      <col style="width:6%">
+      <col style="width:13%">
       <col style="width:16%">
     </colgroup>
-    <thead><tr><th>备注</th><th>API</th><th>分组</th><th>模型</th><th>状态</th><th>延迟</th><th>今日花费</th><th>总花费</th><th>故障信息</th><th>操作</th></tr></thead>
+    <thead><tr><th>备注</th><th>API</th><th>分组</th><th>模型</th><th>状态</th><th>首包延迟</th><th>延迟</th><th>今日请求</th><th>今日花费</th><th>总花费</th><th>故障信息</th><th>操作</th></tr></thead>
     <tbody id="u-list"></tbody>
     <tfoot id="u-foot"></tfoot>
   </table>
@@ -229,6 +232,24 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
 </div>
 
 <!-- 请求日志 -->
+<!-- 限流配置 -->
+<div id="ratelimit" class="panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <p style="font-size:13px;color:#666;margin:0">配置分组和上游的最大并发数，0 表示不限制。当前并发数每 3 秒自动刷新。</p>
+    <button class="btn btn-sm" onclick="loadRateLimit()">刷新</button>
+  </div>
+  <h4 style="margin:12px 0 8px">分组限流</h4>
+  <table>
+    <thead><tr><th>分组</th><th>最大并发</th><th>当前并发</th><th>操作</th></tr></thead>
+    <tbody id="rl-group-list"></tbody>
+  </table>
+  <h4 style="margin:16px 0 8px">上游限流</h4>
+  <table>
+    <thead><tr><th>备注</th><th>API</th><th>分组</th><th>最大并发</th><th>当前并发</th><th>操作</th></tr></thead>
+    <tbody id="rl-upstream-list"></tbody>
+  </table>
+</div>
+
 <div id="reqlog" class="panel">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
     <p style="font-size:13px;color:#666;margin:0">最近 500 条代理请求记录，持久化存储于 data/logs/ 目录。</p>
@@ -368,6 +389,7 @@ function showTab(id, push) {
   if (push !== false) history.replaceState(null, '', '/ui#' + id);
   if (id === 'health') { renderGroupHealthCheck(); loadHistory(); }
   if (id === 'sessions') { loadSessions(); }
+  if (id === 'ratelimit') { loadRateLimit(); }
   if (id === 'reqlog') { loadReqLogs(); }
 }
 function restoreTab() {
@@ -627,6 +649,7 @@ async function loadUpstreams() {
   ]);
   upstreams = r.data || [];
   const stats = (sr.data && sr.data.upstreams) || {};
+  const siteStats = (sr.data && sr.data.site) || {};
   upstreamStats = stats;
   const tbody = document.getElementById('u-list');
   tbody.innerHTML = upstreams.map(u => {
@@ -653,16 +676,20 @@ async function loadUpstreams() {
       }
     }
     const st = stats[u.id] || {};
+    const ttfb = st.avg_ttfb_ms ? st.avg_ttfb_ms + 'ms' : '-';
     const latency = st.avg_latency_ms ? st.avg_latency_ms + 'ms' : '-';
+    const todayReqs = st.today_request_count || '-';
     const todayCost = st.today_cost ? '$' + st.today_cost.toFixed(4) : '-';
     const totalCost = st.total_cost ? '$' + st.total_cost.toFixed(4) : '-';
     return `<tr>
-      <td>${u.remark || '-'}</td>
+      <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(u.remark || '')}">${u.remark || '-'}</td>
       <td style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(u.api)}">${escHtml(u.api)}</td>
       <td>${groupName(u.group_id)}</td>
       <td style="font-size:11px;overflow:hidden">${(u.models && u.models.length) ? u.models.map(m => '<span style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:3px;padding:1px 4px;font-family:monospace;margin:1px">' + m + '</span>').join(' ') : '<span style="color:#999">继承分组</span>'}</td>
       <td class="${sc}">${statusLabel}${statusExtra}</td>
+      <td style="font-size:12px;color:#1976d2">${ttfb}</td>
       <td style="font-size:12px;color:#1976d2">${latency}</td>
+      <td style="font-size:12px;color:#555">${todayReqs}</td>
       <td style="font-size:12px;color:#388e3c;font-weight:500">${todayCost}</td>
       <td style="font-size:12px;color:#e65100;font-weight:500">${totalCost}</td>
       <td style="font-size:12px;white-space:normal;word-break:break-all;overflow:hidden">${fault}</td>
@@ -675,13 +702,16 @@ async function loadUpstreams() {
       </td>
     </tr>`;
   }).join('');
-  // 全站汇总
-  let siteTodayCost = 0, siteTotalCost = 0;
-  for (const k in stats) { siteTodayCost += stats[k].today_cost || 0; siteTotalCost += stats[k].total_cost || 0; }
+  // 全站汇总（独立累计，不依赖上游列表）
+  const siteTodayReqs = siteStats.today_requests || 0;
+  const siteTodayCost = siteStats.today_cost || 0;
+  const siteTotalCost = siteStats.total_cost || 0;
+  const siteTotalReqs = siteStats.total_requests || 0;
   document.getElementById('u-foot').innerHTML = `<tr style="background:#fafafa;font-weight:600">
-    <td colspan="6" style="text-align:right">全站合计</td>
+    <td colspan="7" style="text-align:right">全站合计</td>
+    <td style="color:#555">${siteTodayReqs}</td>
     <td style="color:#388e3c">$${siteTodayCost.toFixed(4)}</td>
-    <td style="color:#e65100">$${siteTotalCost.toFixed(4)}</td>
+    <td style="color:#e65100">$${siteTotalCost.toFixed(4)} (${siteTotalReqs}次)</td>
     <td colspan="2"></td>
   </tr>`;
   startCooldownTimers();
@@ -1125,6 +1155,96 @@ async function loadSessions() {
       <td style="font-size:12px;color:${remain < 60 ? '#e65100' : '#666'}">${remain}s</td>
     </tr>`;
   }).join('');
+}
+
+// 限流配置
+let rlTimer = null;
+async function loadRateLimit() {
+  if (rlTimer) { clearInterval(rlTimer); rlTimer = null; }
+  const [gr, ur, cr] = await Promise.all([
+    api('GET', '/groups'),
+    api('GET', '/upstreams'),
+    api('GET', '/concurrency')
+  ]);
+  const groups = gr.data || [];
+  const ups = ur.data || [];
+  const conc = cr.data || {};
+
+  // 分组表
+  const groupLoad = {};
+  for (const u of ups) {
+    if (!groupLoad[u.group_id]) groupLoad[u.group_id] = 0;
+    groupLoad[u.group_id] += (conc[u.id] || 0);
+  }
+  document.getElementById('rl-group-list').innerHTML = groups.map(g => {
+    const cur = groupLoad[g.id] || 0;
+    const max = g.max_concurrency || 0;
+    const overload = max > 0 && cur >= max;
+    return `<tr>
+      <td>${escHtml(g.name)}</td>
+      <td><input type="number" min="0" value="${max}" style="width:80px" id="rl-g-${g.id}"></td>
+      <td style="color:${overload ? '#d32f2f' : '#333'};font-weight:${overload ? '600' : '400'}">${cur}${max > 0 ? ' / ' + max : ''}</td>
+      <td><button class="btn btn-primary btn-sm" onclick="saveGroupConcurrency('${g.id}','${escAttr(g.name)}')">保存</button></td>
+    </tr>`;
+  }).join('');
+
+  // 上游表
+  const gMap = {};
+  groups.forEach(g => gMap[g.id] = g.name);
+  document.getElementById('rl-upstream-list').innerHTML = ups.map(u => {
+    const cur = conc[u.id] || 0;
+    const max = u.max_concurrency || 0;
+    const overload = max > 0 && cur >= max;
+    return `<tr>
+      <td>${u.remark || '-'}</td>
+      <td style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px" title="${escAttr(u.api)}">${escHtml(u.api)}</td>
+      <td>${gMap[u.group_id] || u.group_id}</td>
+      <td><input type="number" min="0" value="${max}" style="width:80px" id="rl-u-${u.id}"></td>
+      <td style="color:${overload ? '#d32f2f' : '#333'};font-weight:${overload ? '600' : '400'}">${cur}${max > 0 ? ' / ' + max : ''}</td>
+      <td><button class="btn btn-primary btn-sm" onclick="saveUpstreamConcurrency('${u.id}')">保存</button></td>
+    </tr>`;
+  }).join('');
+
+  // 自动刷新并发数
+  rlTimer = setInterval(async () => {
+    if (document.getElementById('ratelimit').classList.contains('active')) {
+      const cr2 = await api('GET', '/concurrency');
+      const conc2 = cr2.data || {};
+      // 更新分组当前并发
+      for (const g of groups) {
+        let cur2 = 0;
+        for (const u of ups) { if (u.group_id === g.id) cur2 += (conc2[u.id] || 0); }
+        const max2 = g.max_concurrency || 0;
+        const td = document.querySelector(`#rl-g-${g.id}`)?.parentElement?.nextElementSibling;
+        if (td) { td.textContent = cur2 + (max2 > 0 ? ' / ' + max2 : ''); td.style.color = (max2 > 0 && cur2 >= max2) ? '#d32f2f' : '#333'; }
+      }
+      // 更新上游当前并发
+      for (const u of ups) {
+        const cur2 = conc2[u.id] || 0;
+        const max2 = u.max_concurrency || 0;
+        const td = document.querySelector(`#rl-u-${u.id}`)?.parentElement?.nextElementSibling;
+        if (td) { td.textContent = cur2 + (max2 > 0 ? ' / ' + max2 : ''); td.style.color = (max2 > 0 && cur2 >= max2) ? '#d32f2f' : '#333'; }
+      }
+    } else { clearInterval(rlTimer); rlTimer = null; }
+  }, 3000);
+}
+
+async function saveGroupConcurrency(gid, gname) {
+  const val = parseInt(document.getElementById('rl-g-' + gid).value) || 0;
+  try {
+    await api('PUT', '/groups/' + gid, { name: gname, max_concurrency: val });
+    msg('分组限流已更新', true);
+    loadRateLimit();
+  } catch(e) { msg(e.message, false); }
+}
+
+async function saveUpstreamConcurrency(uid) {
+  const val = parseInt(document.getElementById('rl-u-' + uid).value) || 0;
+  try {
+    await api('PUT', '/upstreams/' + uid, { max_concurrency: val });
+    msg('上游限流已更新', true);
+    loadRateLimit();
+  } catch(e) { msg(e.message, false); }
 }
 
 // Request Logs

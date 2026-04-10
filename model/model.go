@@ -2,16 +2,17 @@ package model
 
 // Upstream 上游 API 配置
 type Upstream struct {
-	ID          string   `json:"id"`
-	GroupID     string   `json:"group_id"`
-	API         string   `json:"api"`
-	APIKey      string   `json:"api_key"`
-	Remark      string   `json:"remark"`
-	Models      []string `json:"models,omitempty"`       // 支持的模型，空则继承分组
-	Status      string   `json:"status"`                 // active / faulted / disabled
-	FaultedAt   *int64   `json:"faulted_at,omitempty"`   // 故障时间戳
-	FaultType   string   `json:"fault_type,omitempty"`   // auto / manual
-	FaultReason string   `json:"fault_reason,omitempty"` // 故障原因
+	ID             string   `json:"id"`
+	GroupID        string   `json:"group_id"`
+	API            string   `json:"api"`
+	APIKey         string   `json:"api_key"`
+	Remark         string   `json:"remark"`
+	Models         []string `json:"models,omitempty"`         // 支持的模型，空则继承分组
+	MaxConcurrency int      `json:"max_concurrency,omitempty"` // 最大并发数，0 不限制
+	Status         string   `json:"status"`                   // active / faulted / disabled
+	FaultedAt      *int64   `json:"faulted_at,omitempty"`     // 故障时间戳
+	FaultType      string   `json:"fault_type,omitempty"`     // auto / manual
+	FaultReason    string   `json:"fault_reason,omitempty"`   // 故障原因
 }
 
 // FailoverRule 故障转移规则
@@ -24,12 +25,13 @@ type FailoverRule struct {
 
 // Group 分组
 type Group struct {
-	ID            string             `json:"id"`
-	Name          string             `json:"name"`
-	APIKey        string             `json:"api_key"`
-	Models        []string           `json:"models,omitempty"` // 分组支持的模型
-	FailoverRules []FailoverRule     `json:"failover_rules,omitempty"`
-	HealthCheck   *HealthCheckConfig `json:"health_check,omitempty"`
+	ID             string             `json:"id"`
+	Name           string             `json:"name"`
+	APIKey         string             `json:"api_key"`
+	Models         []string           `json:"models,omitempty"` // 分组支持的模型
+	MaxConcurrency int                `json:"max_concurrency,omitempty"` // 分组最大并发数，0 不限制
+	FailoverRules  []FailoverRule     `json:"failover_rules,omitempty"`
+	HealthCheck    *HealthCheckConfig `json:"health_check,omitempty"`
 }
 
 // HealthCheckConfig 健康检查配置
