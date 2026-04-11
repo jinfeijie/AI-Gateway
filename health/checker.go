@@ -339,6 +339,10 @@ func (ch *Checker) doProbe(api string, apiKey string, probeModel string, hc mode
 	reply := extractReply(respStr)
 
 	healthy := resp.StatusCode >= 200 && resp.StatusCode < 300
+	// 响应体为空视为异常
+	if healthy && len(respBody) == 0 {
+		healthy = false
+	}
 	// 保存关键响应 header
 	headers := make(map[string]string)
 	for _, k := range []string{"retry-after", "x-ratelimit-reset"} {
@@ -354,7 +358,11 @@ func (ch *Checker) doProbe(api string, apiKey string, probeModel string, hc mode
 		Headers:    headers,
 	}
 	if !healthy {
-		result.Error = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		if len(respBody) == 0 {
+			result.Error = fmt.Sprintf("HTTP %d: empty response body", resp.StatusCode)
+		} else {
+			result.Error = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
 	}
 	return result
 }

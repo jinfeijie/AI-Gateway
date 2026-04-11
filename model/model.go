@@ -115,6 +115,7 @@ func DefaultModelPricing() []ModelPricing {
 // DefaultFailoverRules 默认故障转移规则
 func DefaultFailoverRules() []FailoverRule {
 	return []FailoverRule{
+		{Code: 403, Action: "offline"},
 		{Code: 404, Action: "offline"},
 		{Code: 429, Action: "cooldown", CooldownS: 60, UseHeader: "retry-after"},
 		{Code: 500, Action: "offline"},

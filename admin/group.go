@@ -61,9 +61,15 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 			for i := range cfg.Groups {
 				if cfg.Groups[i].ID == id {
 					cfg.Groups[i].Name = req.Name
-					cfg.Groups[i].Models = req.Models
-					cfg.Groups[i].FailoverRules = req.FailoverRules
-					cfg.Groups[i].HealthCheck = req.HealthCheck
+					if req.Models != nil {
+						cfg.Groups[i].Models = req.Models
+					}
+					if req.FailoverRules != nil {
+						cfg.Groups[i].FailoverRules = req.FailoverRules
+					}
+					if req.HealthCheck != nil {
+						cfg.Groups[i].HealthCheck = req.HealthCheck
+					}
 					if req.MaxConcurrency != nil {
 						cfg.Groups[i].MaxConcurrency = *req.MaxConcurrency
 					}
