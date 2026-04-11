@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/json"
 	"log"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
@@ -220,15 +221,21 @@ func (b *Balancer) Pick(groupID string, sessionKey string, reqModel string, excl
 
 func (b *Balancer) pickLeastLoad(actives []model.Upstream) model.Upstream {
 	minLoad := int64(1<<63 - 1)
-	minIdx := 0
-	for i, u := range actives {
+	for _, u := range actives {
 		load := b.GetLoad(u.ID)
 		if load < minLoad {
 			minLoad = load
-			minIdx = i
 		}
 	}
-	return actives[minIdx]
+	// 收集所有最小负载的上游，随机选一个
+	var candidates []int
+	for i, u := range actives {
+		if b.GetLoad(u.ID) == minLoad {
+			candidates = append(candidates, i)
+		}
+	}
+	idx := candidates[rand.Intn(len(candidates))]
+	return actives[idx]
 }
 
 // IncLoad 请求开始时增加负载计数
