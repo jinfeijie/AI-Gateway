@@ -64,6 +64,12 @@ func truncateBody(b []byte, max int) string {
 	return string(b[:max]) + "...(truncated)"
 }
 
+// costEntry 异步费用更新
+type costEntry struct {
+	upstreamID string
+	cost       float64
+}
+
 type Handler struct {
 	store    *store.Store
 	balancer *Balancer
@@ -72,6 +78,8 @@ type Handler struct {
 	logs    []RequestLog
 	logsMu  sync.RWMutex
 	logFile *os.File // 日志持久化文件
+	logCh   chan RequestLog // 异步写入文件
+	costCh  chan costEntry  // 异步费用更新
 
 	siteStats     SiteStats
 	siteStatsMu   sync.Mutex
@@ -93,15 +101,15 @@ type UpstreamAccum struct {
 
 func (h *Handler) addLog(entry RequestLog) {
 	h.logsMu.Lock()
-	defer h.logsMu.Unlock()
 	h.logs = append(h.logs, entry)
 	if len(h.logs) > maxRequestLogs {
 		h.logs = h.logs[len(h.logs)-maxRequestLogs:]
 	}
-	// 追加写入文件
-	if h.logFile != nil {
-		data, _ := json.Marshal(entry)
-		h.logFile.Write(append(data, '\n'))
+	h.logsMu.Unlock()
+	// 非阻塞发送到异步写入 goroutine
+	select {
+	case h.logCh <- entry:
+	default:
 	}
 }
 
@@ -279,6 +287,8 @@ func NewHandler(s *store.Store, dataPath string) *Handler {
 		client: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
+		logCh:  make(chan RequestLog, 1024),
+		costCh: make(chan costEntry, 256),
 	}
 	h.balancer.SetSessionsPath(dataPath)
 	// 日志目录：数据文件同级的 logs/
@@ -298,7 +308,28 @@ func NewHandler(s *store.Store, dataPath string) *Handler {
 	// 上游统计持久化
 	h.upstreamStatsPath = filepath.Join(filepath.Dir(dataPath), "upstream_stats.json")
 	h.loadUpstreamStats()
+	// 启动异步写入 goroutine
+	go h.logWriter()
+	go h.costWriter()
 	return h
+}
+
+// logWriter 后台 goroutine，异步写入日志文件
+func (h *Handler) logWriter() {
+	for entry := range h.logCh {
+		if h.logFile != nil {
+			data, _ := json.Marshal(entry)
+			h.logFile.Write(append(data, '\n'))
+		}
+	}
+}
+
+// costWriter 后台 goroutine，异步持久化费用统计
+func (h *Handler) costWriter() {
+	for range h.costCh {
+		h.saveSiteStats()
+		h.saveUpstreamStats()
+	}
 }
 
 func (h *Handler) loadLogs(path string) {
@@ -307,6 +338,47 @@ func (h *Handler) loadLogs(path string) {
 		return
 	}
 	defer f.Close()
+
+	// 从文件尾部向前扫描，只读取最后 maxRequestLogs 行
+	info, err := f.Stat()
+	if err != nil {
+		return
+	}
+	size := info.Size()
+	if size == 0 {
+		return
+	}
+
+	// 向前扫描找到倒数第 maxRequestLogs 个换行符的位置
+	readFrom := int64(0)
+	if size > 0 {
+		buf := make([]byte, 32*1024)
+		nlCount := 0
+		pos := size
+		for pos > 0 {
+			readSize := int64(len(buf))
+			if readSize > pos {
+				readSize = pos
+			}
+			pos -= readSize
+			n, err := f.ReadAt(buf[:readSize], pos)
+			if err != nil && err != io.EOF {
+				break
+			}
+			for i := n - 1; i >= 0; i-- {
+				if buf[i] == '\n' {
+					nlCount++
+					if nlCount > maxRequestLogs {
+						readFrom = pos + int64(i) + 1
+						goto scan
+					}
+				}
+			}
+		}
+	}
+
+scan:
+	f.Seek(readFrom, io.SeekStart)
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 64*1024), 64*1024)
 	for scanner.Scan() {
@@ -315,7 +387,7 @@ func (h *Handler) loadLogs(path string) {
 			h.logs = append(h.logs, entry)
 		}
 	}
-	// 只保留最近的
+	// 保险：确保不超过上限
 	if len(h.logs) > maxRequestLogs {
 		h.logs = h.logs[len(h.logs)-maxRequestLogs:]
 	}
@@ -373,7 +445,6 @@ func (h *Handler) addSiteCost(cost float64) {
 	h.siteStats.TodayRequests++
 	h.siteStats.TotalCost += cost
 	h.siteStats.TotalRequests++
-	h.saveSiteStats()
 }
 
 func (h *Handler) pricingMap() map[string]model.ModelPricing {
@@ -444,7 +515,6 @@ func (h *Handler) addUpstreamCost(upstreamID string, cost float64) {
 	acc.TodayRequests++
 	acc.TotalCost += cost
 	acc.TotalRequests++
-	h.saveUpstreamStats()
 }
 
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
@@ -647,6 +717,11 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			cost := calcCost(logEntry, h.pricingMap())
 			h.addSiteCost(cost)
 			h.addUpstreamCost(upstream.ID, cost)
+			// 非阻塞发送费用到异步持久化 goroutine
+			select {
+			case h.costCh <- costEntry{upstreamID: upstream.ID, cost: cost}:
+			default:
+			}
 		}
 		return
 	}

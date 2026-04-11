@@ -391,6 +391,16 @@ function showTab(id, push) {
   if (id === 'sessions') { loadSessions(); }
   if (id === 'ratelimit') { loadRateLimit(); }
   if (id === 'reqlog') { loadReqLogs(); }
+  // 上游 tab 自动刷新
+  if (id === 'upstreams') {
+    loadUpstreams();
+    if (upTimer) { clearInterval(upTimer); upTimer = null; }
+    upTimer = setInterval(() => {
+      if (document.getElementById('upstreams').classList.contains('active')) {
+        loadUpstreams();
+      } else { clearInterval(upTimer); upTimer = null; }
+    }, 5000);
+  } else if (upTimer) { clearInterval(upTimer); upTimer = null; }
 }
 function restoreTab() {
   const hash = location.hash.replace('#', '');
@@ -1159,6 +1169,7 @@ async function loadSessions() {
 
 // 限流配置
 let rlTimer = null;
+let upTimer = null; // 上游自动刷新定时器
 async function loadRateLimit() {
   if (rlTimer) { clearInterval(rlTimer); rlTimer = null; }
   const [gr, ur, cr] = await Promise.all([
