@@ -123,25 +123,27 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
     <select id="u-filter" onchange="loadUpstreams()"><option value="">全部</option></select>
     <button class="btn btn-primary" onclick="batchProbe()" id="batch-probe-btn">批量测活</button>
   </div>
-  <table style="table-layout:fixed">
+  <div style="overflow-x:auto">
+  <table style="table-layout:fixed;min-width:1200px">
     <colgroup>
-      <col style="width:10%">
-      <col style="width:13%">
-      <col style="width:5%">
-      <col style="width:7%">
-      <col style="width:5%">
-      <col style="width:5%">
-      <col style="width:5%">
-      <col style="width:5%">
-      <col style="width:6%">
-      <col style="width:6%">
-      <col style="width:13%">
-      <col style="width:16%">
+      <col style="width:80px">
+      <col style="width:140px">
+      <col style="width:60px">
+      <col style="width:130px">
+      <col style="width:60px">
+      <col style="width:60px">
+      <col style="width:60px">
+      <col style="width:55px">
+      <col style="width:70px">
+      <col style="width:75px">
+      <col style="width:140px">
+      <col style="width:180px">
     </colgroup>
     <thead><tr><th>备注</th><th>API</th><th>分组</th><th>模型</th><th>状态</th><th>首包延迟</th><th>延迟</th><th>今日请求</th><th>今日花费</th><th>总花费</th><th>故障信息</th><th>操作</th></tr></thead>
     <tbody id="u-list"></tbody>
     <tfoot id="u-foot"></tfoot>
   </table>
+  </div>
 </div>
 
 <!-- 健康检查 -->
@@ -225,8 +227,9 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
     <p style="font-size:13px;color:#666;margin:0">当前活跃的会话绑定关系，TTL 5 分钟无活动自动清除。</p>
     <button class="btn btn-sm" onclick="loadSessions()">刷新</button>
   </div>
+  <div id="sess-stats" style="margin-bottom:12px;font-size:13px"></div>
   <table>
-    <thead><tr><th>会话标识</th><th>绑定上游</th><th>最后访问</th><th>距过期</th></tr></thead>
+    <thead><tr><th>会话标识</th><th>绑定上游</th><th>请求数</th><th>最后访问</th><th>距过期</th></tr></thead>
     <tbody id="sess-list"></tbody>
   </table>
 </div>
@@ -261,7 +264,7 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
     </div>
   </div>
   <table>
-    <thead><tr><th>时间</th><th>分组</th><th>模型</th><th>上游</th><th>状态码</th><th>耗时</th><th>结果</th><th>详情</th></tr></thead>
+    <thead><tr><th>时间</th><th>分组</th><th>模型</th><th>上游</th><th>状态码</th><th>输入</th><th>输出</th><th>费用</th><th>耗时</th><th>结果</th><th>详情</th></tr></thead>
     <tbody id="rl-list"></tbody>
   </table>
 </div>
@@ -385,7 +388,7 @@ function showTab(id, push) {
   if (tabBtn) tabBtn.classList.add('active');
   if (push !== false) history.replaceState(null, '', '/ui#' + id);
   if (id === 'health') { renderGroupHealthCheck(); loadHistory(); }
-  if (id === 'sessions') { loadSessions(); }
+  if (id === 'sessions') { loadSessions(); startSessionTimer(); }
   if (id === 'ratelimit') { loadRateLimit(); }
   if (id === 'reqlog') { loadReqLogs(); }
   // 上游 tab 自动刷新
@@ -694,7 +697,7 @@ async function loadUpstreams() {
       <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(u.remark || '')}">${u.remark || '-'}</td>
       <td style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(u.api)}">${escHtml(u.api)}</td>
       <td>${groupName(u.group_id)}</td>
-      <td style="font-size:11px;overflow:hidden">${(u.models && u.models.length) ? u.models.map(m => '<span style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:3px;padding:1px 4px;font-family:monospace;margin:1px">' + m + '</span>').join(' ') : '<span style="color:#999">继承分组</span>'}</td>
+      <td style="font-size:11px;overflow:hidden">${(u.models && u.models.length) ? '<div style="display:flex;flex-direction:column;gap:2px">' + u.models.map(m => '<span style="display:inline-block;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:3px;padding:1px 4px;font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + m + '</span>').join('') + '</div>' : '<span style="color:#999">继承分组</span>'}</td>
       <td class="${sc}">${statusLabel}${statusExtra}</td>
       <td style="font-size:12px;color:#1976d2">${ttfb}</td>
       <td style="font-size:12px;color:#1976d2">${latency}</td>
@@ -1141,25 +1144,65 @@ async function delStripField(idx) {
 }
 
 // Sessions
+let sessTimer = null;
+function startSessionTimer() {
+  if (sessTimer) { clearInterval(sessTimer); sessTimer = null; }
+  sessTimer = setInterval(() => {
+    if (document.getElementById('sessions').classList.contains('active')) {
+      loadSessions();
+    } else { clearInterval(sessTimer); sessTimer = null; }
+  }, 3000);
+}
 async function loadSessions() {
-  const r = await api('GET', '/sessions');
+  const [r, lr] = await Promise.all([
+    api('GET', '/sessions'),
+    api('GET', '/request-logs')
+  ]);
   const list = r.data || [];
+  const logs = lr.data || [];
+  const totalReqs = logs.length;
+  const boundReqs = logs.filter(e => e.session_key && e.session_key !== '').length;
+  const unboundReqs = totalReqs - boundReqs;
   const tbody = document.getElementById('sess-list');
+  document.getElementById('sess-stats').innerHTML = `<span style="margin-right:16px">活跃会话: <b>${list.length}</b></span><span style="margin-right:16px">亲和请求: <b style="color:#388e3c">${boundReqs}</b></span><span>未亲和请求: <b style="color:#e65100">${unboundReqs}</b></span><span style="color:#999;margin-left:8px">(近 ${totalReqs} 条)</span>`;
   if (list.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#999;padding:20px">暂无会话绑定</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#999;padding:20px">暂无会话绑定</td></tr>';
     return;
   }
   const now = Date.now() / 1000;
   const ttl = 300; // 5 minutes
-  tbody.innerHTML = list.sort((a, b) => b.accessed_at - a.accessed_at).map(s => {
+  tbody.innerHTML = list.sort((a, b) => b.accessed_at - a.accessed_at).map((s, i) => {
     const t = new Date(s.accessed_at * 1000).toLocaleString();
     const u = upstreams.find(u => u.id === s.upstream_id);
     const uLabel = u ? (u.remark || u.api) : s.upstream_id.substring(0, 8);
     const remain = Math.max(0, Math.round(s.accessed_at + ttl - now));
-    const key = s.session_key.length > 32 ? s.session_key.substring(0, 32) + '...' : s.session_key;
+    // 解析会话标识
+    const raw = s.raw_user_id || s.session_key || '';
+    let idHtml = '';
+    function parseUserID(val) {
+      if (!val || typeof val !== 'string') return null;
+      try {
+        let parsed = JSON.parse(val);
+        // 双重编码：parse 后还是字符串则再 parse 一次
+        if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch(e2) { return null; } }
+        if (typeof parsed === 'object' && parsed !== null) return parsed;
+      } catch(e) {}
+      return null;
+    }
+    const uid = parseUserID(raw);
+    if (uid) {
+        const rows = [];
+        if (uid.device_id) rows.push(`<div><span style="color:#999;font-size:11px">device</span> <code style="font-size:12px;user-select:all">${escHtml(uid.device_id)}</code> <button class="btn btn-sm" style="padding:0 4px;font-size:10px;background:#eee" onclick="copyText('${escAttr(uid.device_id)}')">&#128203;</button></div>`);
+        if (uid.session_id) rows.push(`<div><span style="color:#999;font-size:11px">session</span> <code style="font-size:12px;user-select:all">${escHtml(uid.session_id)}</code> <button class="btn btn-sm" style="padding:0 4px;font-size:10px;background:#eee" onclick="copyText('${escAttr(uid.session_id)}')">&#128203;</button></div>`);
+        if (uid.account_uuid) rows.push(`<div><span style="color:#999;font-size:11px">account</span> <code style="font-size:12px;user-select:all">${escHtml(uid.account_uuid)}</code> <button class="btn btn-sm" style="padding:0 4px;font-size:10px;background:#eee" onclick="copyText('${escAttr(uid.account_uuid)}')">&#128203;</button></div>`);
+        if (rows.length) { idHtml = rows.join(''); } else { idHtml = `<code style="font-size:12px">${escHtml(raw)}</code>`; }
+    } else {
+      idHtml = `<code style="font-size:12px;user-select:all">${escHtml(raw)}</code> <button class="btn btn-sm" style="padding:0 4px;font-size:10px;background:#eee" onclick="copyText('${escAttr(raw)}')">&#128203;</button>`;
+    }
     return `<tr>
-      <td style="font-size:13px;font-family:monospace" title="${escAttr(s.session_key)}">${escHtml(key)}</td>
+      <td style="max-width:400px">${idHtml}</td>
       <td>${uLabel}</td>
+      <td style="font-size:13px;font-weight:600">${s.req_count || 1}</td>
       <td style="font-size:12px">${t}</td>
       <td style="font-size:12px;color:${remain < 60 ? '#e65100' : '#666'}">${remain}s</td>
     </tr>`;
@@ -1272,10 +1315,21 @@ async function saveUpstreamConcurrency(uid) {
 
 // Request Logs
 let reqLogs = [];
+let pricingMap = {};
 async function loadReqLogs() {
-  const r = await api('GET', '/request-logs');
+  const [r, pr] = await Promise.all([
+    api('GET', '/request-logs'),
+    api('GET', '/pricing')
+  ]);
   reqLogs = r.data || [];
+  pricingMap = {};
+  for (const p of (pr.data || [])) { pricingMap[p.model] = p; }
   renderReqLogs();
+}
+function calcLogCost(e) {
+  const p = pricingMap[e.model];
+  if (!p) return 0;
+  return ((e.input_tokens || 0) * p.input + (e.output_tokens || 0) * p.output + (e.cache_read_tokens || 0) * p.cache_read + (e.cache_write_tokens || 0) * p.cache_write) / 1000000;
 }
 function renderReqLogs() {
   const filter = document.getElementById('rl-filter').value;
@@ -1283,7 +1337,7 @@ function renderReqLogs() {
   if (filter) list = list.filter(e => e.action === filter);
   const tbody = document.getElementById('rl-list');
   if (list.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;padding:20px">暂无记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#999;padding:20px">暂无记录</td></tr>';
     return;
   }
   tbody.innerHTML = list.map((e, idx) => {
@@ -1293,15 +1347,34 @@ function renderReqLogs() {
     const detail = e.detail || '-';
     const hasExtra = detail.length > 30 || e.request_body || e.response_body;
     const shortDetail = detail.length > 60 ? detail.substring(0, 60) + '...' : detail;
+    const detailLabel = hasExtra ? (shortDetail === '-' ? '查看' : shortDetail) : detail;
+    const fmtN = n => n ? n.toLocaleString() : '';
+    let inputHtml = '-';
+    if (e.input_tokens) {
+      inputHtml = `<span style="font-size:14px;font-weight:600">${fmtN(e.input_tokens)}</span>`;
+      const cacheParts = [];
+      if (e.cache_read_tokens) cacheParts.push('缓存读 ' + fmtN(e.cache_read_tokens));
+      if (e.cache_write_tokens) cacheParts.push('写 ' + fmtN(e.cache_write_tokens));
+      if (cacheParts.length) inputHtml += `<br><span style="font-size:11px;color:#999">${cacheParts.join(' · ')}</span>`;
+    }
+    let outputHtml = '-';
+    if (e.output_tokens) {
+      outputHtml = `<span style="font-size:14px;font-weight:600">${fmtN(e.output_tokens)}</span>`;
+    }
+    const cost = calcLogCost(e);
+    const costHtml = cost > 0 ? `$${cost.toFixed(4)}` : '-';
     return `<tr>
       <td style="font-size:12px">${t}</td>
       <td>${e.group_name || '-'}</td>
       <td style="font-size:12px;font-family:monospace">${e.model || '-'}</td>
       <td>${e.remark || (e.upstream_id ? e.upstream_id.substring(0,8) : '-')}</td>
       <td>${e.status || '-'}</td>
+      <td style="white-space:nowrap">${inputHtml}</td>
+      <td style="white-space:nowrap">${outputHtml}</td>
+      <td style="font-size:12px;color:#e65100;font-weight:500;white-space:nowrap">${costHtml}</td>
       <td style="font-size:12px">${e.duration_ms}ms</td>
       <td style="color:${actionColor[e.action]||'#666'};font-weight:bold;font-size:13px">${actionMap[e.action]||e.action}</td>
-      <td style="font-size:12px;color:#666">${hasExtra ? `<span style="cursor:pointer;text-decoration:underline dotted" onclick="showLogDetail(${idx})">${shortDetail}</span>` : detail}</td>
+      <td style="font-size:12px;color:#666">${hasExtra ? `<span style="cursor:pointer;text-decoration:underline dotted" onclick="showLogDetail(${idx})">${detailLabel}</span>` : detail}</td>
     </tr>`;
   }).join('');
 }

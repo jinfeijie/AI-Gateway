@@ -17,6 +17,8 @@ import (
 type sessionBinding struct {
 	UpstreamID string
 	AccessedAt time.Time
+	RawUserID  string // 原始 metadata.user_id JSON
+	ReqCount   int    // 会话期间请求数
 }
 
 type Balancer struct {
@@ -71,6 +73,8 @@ type sessionFile struct {
 	Key        string `json:"key"`
 	UpstreamID string `json:"upstream_id"`
 	AccessedAt int64  `json:"accessed_at"`
+	RawUserID  string `json:"raw_user_id,omitempty"`
+	ReqCount   int    `json:"req_count,omitempty"`
 }
 
 func (b *Balancer) loadSessions() {
@@ -95,6 +99,8 @@ func (b *Balancer) loadSessions() {
 			b.sessions[e.Key] = &sessionBinding{
 				UpstreamID: e.UpstreamID,
 				AccessedAt: at,
+				RawUserID:  e.RawUserID,
+				ReqCount:   e.ReqCount,
 			}
 			loaded++
 		}
@@ -115,6 +121,8 @@ func (b *Balancer) saveSessions() {
 			Key:        k,
 			UpstreamID: v.UpstreamID,
 			AccessedAt: v.AccessedAt.Unix(),
+			RawUserID:  v.RawUserID,
+			ReqCount:   v.ReqCount,
 		})
 	}
 	b.sessionsMu.RUnlock()
@@ -143,7 +151,7 @@ func (b *Balancer) SetCooldown(upstreamID string, d time.Duration) {
 }
 
 // Pick 选择上游: 模型匹配 → 会话亲和 → 最少负载（跳过冷却中的上游）
-func (b *Balancer) Pick(groupID string, sessionKey string, reqModel string, exclude map[string]bool) *model.Upstream {
+func (b *Balancer) Pick(groupID string, sessionKey string, rawUserID string, reqModel string, exclude map[string]bool) *model.Upstream {
 	cfg := b.store.Get()
 
 	// 查找分组配置
@@ -197,6 +205,10 @@ func (b *Balancer) Pick(groupID string, sessionKey string, reqModel string, excl
 				if u.ID == binding.UpstreamID {
 					b.sessionsMu.Lock()
 					binding.AccessedAt = time.Now()
+					binding.ReqCount++
+					if rawUserID != "" {
+						binding.RawUserID = rawUserID
+					}
 					b.sessionsMu.Unlock()
 					return &u
 				}
@@ -212,6 +224,8 @@ func (b *Balancer) Pick(groupID string, sessionKey string, reqModel string, excl
 		b.sessions[sessionKey] = &sessionBinding{
 			UpstreamID: picked.ID,
 			AccessedAt: time.Now(),
+			RawUserID:  rawUserID,
+			ReqCount:   1,
 		}
 		b.sessionsMu.Unlock()
 	}
@@ -275,6 +289,8 @@ type SessionEntry struct {
 	SessionKey string `json:"session_key"`
 	UpstreamID string `json:"upstream_id"`
 	AccessedAt int64  `json:"accessed_at"`
+	RawUserID  string `json:"raw_user_id,omitempty"`
+	ReqCount   int    `json:"req_count"`
 }
 
 // SessionInfo 返回当前所有会话绑定
@@ -287,6 +303,8 @@ func (b *Balancer) SessionInfo() []any {
 			SessionKey: k,
 			UpstreamID: v.UpstreamID,
 			AccessedAt: v.AccessedAt.Unix(),
+			RawUserID:  v.RawUserID,
+			ReqCount:   v.ReqCount,
 		})
 	}
 	return result

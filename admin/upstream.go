@@ -106,9 +106,9 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 		var req struct {
 			API            string    `json:"api"`
 			APIKey         string    `json:"api_key"`
-			Remark         string    `json:"remark"`
-			Models         *[]string `json:"models"`          // 指针区分未传和空数组
-			MaxConcurrency *int      `json:"max_concurrency"` // 指针区分未传和传 0
+			Remark         *string   `json:"remark"`           // 指针区分未传和传空字符串
+			Models         *[]string `json:"models"`           // 指针区分未传和空数组
+			MaxConcurrency *int      `json:"max_concurrency"`  // 指针区分未传和传 0
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -124,7 +124,9 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 					if req.APIKey != "" {
 						cfg.Upstreams[i].APIKey = req.APIKey
 					}
-					cfg.Upstreams[i].Remark = req.Remark
+					if req.Remark != nil {
+						cfg.Upstreams[i].Remark = *req.Remark
+					}
 					if req.Models != nil {
 						cfg.Upstreams[i].Models = *req.Models
 					}
@@ -233,6 +235,12 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 	r.GET("/stats", func(c *gin.Context) {
 		cfg := s.Get()
 		c.JSON(http.StatusOK, gin.H{"data": bq.DailyStats(cfg.ModelPricing)})
+	})
+
+	// 模型价格表
+	r.GET("/pricing", func(c *gin.Context) {
+		cfg := s.Get()
+		c.JSON(http.StatusOK, gin.H{"data": cfg.ModelPricing})
 	})
 
 	// 当前并发数

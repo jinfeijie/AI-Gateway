@@ -55,14 +55,6 @@ type Usage struct {
 }
 
 const maxRequestLogs = 500
-const maxLogBodySize = 4096 // 日志中记录的请求/响应体最大长度
-
-func truncateBody(b []byte, max int) string {
-	if len(b) <= max {
-		return string(b)
-	}
-	return string(b[:max]) + "...(truncated)"
-}
 
 // costEntry 异步费用更新
 type costEntry struct {
@@ -75,9 +67,8 @@ type Handler struct {
 	balancer *Balancer
 	client   *http.Client
 
-	logs    []RequestLog
-	logsMu  sync.RWMutex
-	logFile *os.File // 日志持久化文件
+	logPath string     // JSONL 日志文件路径
+	logFile *os.File   // 日志持久化文件
 	logCh   chan RequestLog // 异步写入文件
 	costCh  chan costEntry  // 异步费用更新
 
@@ -97,15 +88,10 @@ type UpstreamAccum struct {
 	TodayRequests int     `json:"today_requests"`
 	TotalCost     float64 `json:"total_cost"`
 	TotalRequests int     `json:"total_requests"`
+	GroupID       string  `json:"group_id,omitempty"`
 }
 
 func (h *Handler) addLog(entry RequestLog) {
-	h.logsMu.Lock()
-	h.logs = append(h.logs, entry)
-	if len(h.logs) > maxRequestLogs {
-		h.logs = h.logs[len(h.logs)-maxRequestLogs:]
-	}
-	h.logsMu.Unlock()
 	// 非阻塞发送到异步写入 goroutine
 	select {
 	case h.logCh <- entry:
@@ -115,21 +101,19 @@ func (h *Handler) addLog(entry RequestLog) {
 
 // RequestLogs 返回请求日志（倒序）
 func (h *Handler) RequestLogs() []any {
-	h.logsMu.RLock()
-	defer h.logsMu.RUnlock()
-	result := make([]any, len(h.logs))
-	for i, e := range h.logs {
-		result[len(h.logs)-1-i] = e
+	logs := h.readLastLogs(maxRequestLogs)
+	result := make([]any, len(logs))
+	for i, e := range logs {
+		result[len(logs)-1-i] = e
 	}
 	return result
 }
 
 // RequestLogsRaw 返回原始日志用于统计
 func (h *Handler) RequestLogsRaw() []any {
-	h.logsMu.RLock()
-	defer h.logsMu.RUnlock()
-	result := make([]any, len(h.logs))
-	for i, e := range h.logs {
+	logs := h.readLastLogs(maxRequestLogs)
+	result := make([]any, len(logs))
+	for i, e := range logs {
 		result[i] = e
 	}
 	return result
@@ -186,10 +170,7 @@ func (h *Handler) DailyStats(pricing []model.ModelPricing) any {
 	today := now.Format("2006-01-02")
 
 	// 从日志算延迟（反映近期性能）
-	h.logsMu.RLock()
-	logs := make([]RequestLog, len(h.logs))
-	copy(logs, h.logs)
-	h.logsMu.RUnlock()
+	logs := h.readLastLogs(maxRequestLogs)
 
 	type latencyAcc struct {
 		count     int
@@ -249,7 +230,7 @@ func (h *Handler) DailyStats(pricing []model.ModelPricing) any {
 		}
 	}
 
-	// 分组统计：按上游所属分组聚合
+	// 分组统计：按上游所属分组聚合（优先用持久化的 group_id，上游删除后仍可聚合）
 	cfg := h.store.Get()
 	upGroupMap := make(map[string]string)
 	for _, u := range cfg.Upstreams {
@@ -257,6 +238,12 @@ func (h *Handler) DailyStats(pricing []model.ModelPricing) any {
 	}
 	for id, st := range resp.Upstreams {
 		gid := upGroupMap[id]
+		if gid == "" {
+			// 上游已被删除，从持久化记录中取 group_id
+			if acc, ok := upSnap[id]; ok {
+				gid = acc.GroupID
+			}
+		}
 		if gid == "" {
 			continue
 		}
@@ -295,7 +282,7 @@ func NewHandler(s *store.Store, dataPath string) *Handler {
 	logDir := filepath.Join(filepath.Dir(dataPath), "logs")
 	os.MkdirAll(logDir, 0755)
 	logPath := filepath.Join(logDir, "requests.jsonl")
-	h.loadLogs(logPath)
+	h.logPath = logPath
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		log.Printf("[proxy] failed to open log file: %v", err)
@@ -320,6 +307,7 @@ func (h *Handler) logWriter() {
 		if h.logFile != nil {
 			data, _ := json.Marshal(entry)
 			h.logFile.Write(append(data, '\n'))
+			h.logFile.Sync()
 		}
 	}
 }
@@ -332,46 +320,41 @@ func (h *Handler) costWriter() {
 	}
 }
 
-func (h *Handler) loadLogs(path string) {
-	f, err := os.Open(path)
+// readLastLogs 从 JSONL 文件尾部读取最后 n 条日志
+func (h *Handler) readLastLogs(n int) []RequestLog {
+	f, err := os.Open(h.logPath)
 	if err != nil {
-		return
+		return nil
 	}
 	defer f.Close()
 
-	// 从文件尾部向前扫描，只读取最后 maxRequestLogs 行
 	info, err := f.Stat()
-	if err != nil {
-		return
+	if err != nil || info.Size() == 0 {
+		return nil
 	}
 	size := info.Size()
-	if size == 0 {
-		return
-	}
 
-	// 向前扫描找到倒数第 maxRequestLogs 个换行符的位置
+	// 向前扫描找到倒数第 n 个换行符的位置
 	readFrom := int64(0)
-	if size > 0 {
-		buf := make([]byte, 32*1024)
-		nlCount := 0
-		pos := size
-		for pos > 0 {
-			readSize := int64(len(buf))
-			if readSize > pos {
-				readSize = pos
-			}
-			pos -= readSize
-			n, err := f.ReadAt(buf[:readSize], pos)
-			if err != nil && err != io.EOF {
-				break
-			}
-			for i := n - 1; i >= 0; i-- {
-				if buf[i] == '\n' {
-					nlCount++
-					if nlCount > maxRequestLogs {
-						readFrom = pos + int64(i) + 1
-						goto scan
-					}
+	buf := make([]byte, 32*1024)
+	nlCount := 0
+	pos := size
+	for pos > 0 {
+		readSize := int64(len(buf))
+		if readSize > pos {
+			readSize = pos
+		}
+		pos -= readSize
+		nr, err := f.ReadAt(buf[:readSize], pos)
+		if err != nil && err != io.EOF {
+			break
+		}
+		for i := nr - 1; i >= 0; i-- {
+			if buf[i] == '\n' {
+				nlCount++
+				if nlCount > n {
+					readFrom = pos + int64(i) + 1
+					goto scan
 				}
 			}
 		}
@@ -380,20 +363,18 @@ func (h *Handler) loadLogs(path string) {
 scan:
 	f.Seek(readFrom, io.SeekStart)
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 64*1024)
+	scanner.Buffer(make([]byte, 256*1024), 1024*1024)
+	var logs []RequestLog
 	for scanner.Scan() {
 		var entry RequestLog
 		if json.Unmarshal(scanner.Bytes(), &entry) == nil {
-			h.logs = append(h.logs, entry)
+			logs = append(logs, entry)
 		}
 	}
-	// 保险：确保不超过上限
-	if len(h.logs) > maxRequestLogs {
-		h.logs = h.logs[len(h.logs)-maxRequestLogs:]
+	if len(logs) > n {
+		logs = logs[len(logs)-n:]
 	}
-	if len(h.logs) > 0 {
-		log.Printf("[proxy] loaded %d request logs from %s", len(h.logs), path)
-	}
+	return logs
 }
 
 func (h *Handler) loadSiteStats() {
@@ -404,13 +385,14 @@ func (h *Handler) loadSiteStats() {
 		h.siteStatsMu.Unlock()
 		return
 	}
-	// 文件不存在，从现有日志回填
+	// 文件不存在，从日志文件回填
+	logs := h.readLastLogs(maxRequestLogs)
 	pm := h.pricingMap()
 	today := time.Now().Format("2006-01-02")
 	h.siteStatsMu.Lock()
 	defer h.siteStatsMu.Unlock()
 	h.siteStats.TodayDate = today
-	for _, l := range h.logs {
+	for _, l := range logs {
 		if l.Action != "success" || l.UpstreamID == "" {
 			continue
 		}
@@ -465,19 +447,20 @@ func (h *Handler) loadUpstreamStats() {
 		h.upstreamStatsMu.Unlock()
 		return
 	}
-	// 文件不存在，从现有日志回填
+	// 文件不存在，从日志文件回填
+	logs := h.readLastLogs(maxRequestLogs)
 	pm := h.pricingMap()
 	today := time.Now().Format("2006-01-02")
 	h.upstreamStatsMu.Lock()
 	defer h.upstreamStatsMu.Unlock()
 	h.upstreamStats = make(map[string]*UpstreamAccum)
-	for _, l := range h.logs {
+	for _, l := range logs {
 		if l.Action != "success" || l.UpstreamID == "" {
 			continue
 		}
 		acc := h.upstreamStats[l.UpstreamID]
 		if acc == nil {
-			acc = &UpstreamAccum{TodayDate: today}
+			acc = &UpstreamAccum{TodayDate: today, GroupID: l.GroupID}
 			h.upstreamStats[l.UpstreamID] = acc
 		}
 		cost := calcCost(l, pm)
@@ -497,7 +480,7 @@ func (h *Handler) saveUpstreamStats() {
 	os.WriteFile(h.upstreamStatsPath, data, 0644)
 }
 
-func (h *Handler) addUpstreamCost(upstreamID string, cost float64) {
+func (h *Handler) addUpstreamCost(upstreamID string, groupID string, cost float64) {
 	h.upstreamStatsMu.Lock()
 	defer h.upstreamStatsMu.Unlock()
 	acc := h.upstreamStats[upstreamID]
@@ -511,6 +494,7 @@ func (h *Handler) addUpstreamCost(upstreamID string, cost float64) {
 		acc.TodayCost = 0
 		acc.TodayRequests = 0
 	}
+	acc.GroupID = groupID
 	acc.TodayCost += cost
 	acc.TodayRequests++
 	acc.TotalCost += cost
@@ -558,7 +542,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		}
 	}
 	if apiKey == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing api key"})
+		anthropicError(c, http.StatusUnauthorized, "authentication_error", "missing api key")
 		return
 	}
 
@@ -571,13 +555,13 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		}
 	}
 	if group == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid api key"})
+		anthropicError(c, http.StatusUnauthorized, "authentication_error", "invalid api key")
 		return
 	}
 
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read request body"})
+		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "failed to read request body")
 		return
 	}
 
@@ -591,7 +575,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 	}
 
 	// 会话亲和 session key: 仅从 metadata.user_id 提取，无 user_id 时不做亲和
-	sessionKey := extractUserID(body)
+	sessionKey, rawUserID := extractUserID(body)
 
 	// 提取上游请求 ID（用于关联 new-api 日志）
 	requestID := c.GetHeader("X-Request-Log-Id")
@@ -603,8 +587,9 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
 			Status: 502, Duration: time.Since(startTime).Milliseconds(),
 			Action: "error", Detail: "no active upstream",
+			RequestBody: string(body),
 		})
-		c.JSON(http.StatusBadGateway, gin.H{"error": "no active upstream"})
+		anthropicError(c, http.StatusBadGateway, "api_error", "no active upstream")
 		return
 	}
 
@@ -620,7 +605,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 
 	excluded := make(map[string]bool)
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		upstream := h.balancer.Pick(group.ID, sessionKey, reqModel, excluded)
+		upstream := h.balancer.Pick(group.ID, sessionKey, rawUserID, reqModel, excluded)
 		if upstream == nil {
 			break
 		}
@@ -640,7 +625,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 				UpstreamID: upstream.ID, Remark: upstream.Remark,
 				Status: 0, Duration: time.Since(startTime).Milliseconds(),
 				Action: "failover", Detail: fmt.Sprintf("连接错误: %v", err),
-				RequestBody: truncateBody(body, maxLogBodySize),
+				RequestBody: string(body),
 			})
 			// 客户端主动断开（context canceled）不标记上游故障
 			if c.Request.Context().Err() != nil {
@@ -655,7 +640,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		// 检查是否命中故障转移规则
 		if rule, hit := ruleMap[statusCode]; hit {
 			// 读取错误响应体用于日志
-			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, int64(maxLogBodySize)))
+			errBody, _ := io.ReadAll(resp.Body)
 			errBodyStr := string(errBody)
 			log.Printf("[proxy] upstream %s (%s) returned %d, action=%s, body: %s", upstream.ID, upstream.Remark, statusCode, rule.Action, errBodyStr)
 			detail := fmt.Sprintf("HTTP %d → %s", statusCode, rule.Action)
@@ -684,7 +669,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 				UpstreamID: upstream.ID, Remark: upstream.Remark,
 				Status: statusCode, Duration: time.Since(startTime).Milliseconds(),
 				Action: "failover", Detail: detail,
-				RequestBody: truncateBody(body, maxLogBodySize), ResponseBody: errBodyStr,
+				RequestBody: string(body), ResponseBody: errBodyStr,
 			})
 			resp.Body.Close()
 			continue
@@ -704,19 +689,19 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			Action: "success",
 			InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
 			CacheReadTokens: usage.CacheReadInputTokens, CacheWriteTokens: usage.CacheCreationInputTokens,
+			RequestBody: string(body),
+			ResponseBody: string(respBodyBytes),
 		}
 		if statusCode >= 400 {
 			logEntry.Action = "error"
 			logEntry.Detail = fmt.Sprintf("HTTP %d", statusCode)
-			logEntry.RequestBody = truncateBody(body, maxLogBodySize)
-			logEntry.ResponseBody = truncateBody(respBodyBytes, maxLogBodySize)
-			log.Printf("[proxy] upstream %s (%s) returned %d (not in failover rules), body: %s", upstream.ID, upstream.Remark, statusCode, truncateBody(respBodyBytes, 512))
+			log.Printf("[proxy] upstream %s (%s) returned %d (not in failover rules), body: %s", upstream.ID, upstream.Remark, statusCode, string(respBodyBytes))
 		}
 		h.addLog(logEntry)
 		if logEntry.Action == "success" {
 			cost := calcCost(logEntry, h.pricingMap())
 			h.addSiteCost(cost)
-			h.addUpstreamCost(upstream.ID, cost)
+			h.addUpstreamCost(upstream.ID, group.ID, cost)
 			// 非阻塞发送费用到异步持久化 goroutine
 			select {
 			case h.costCh <- costEntry{upstreamID: upstream.ID, cost: cost}:
@@ -731,8 +716,9 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
 		Status: 502, Duration: time.Since(startTime).Milliseconds(),
 		Action: "error", Detail: "all upstreams failed",
+		RequestBody: string(body),
 	})
-	c.JSON(http.StatusBadGateway, gin.H{"error": "all upstreams failed"})
+	anthropicError(c, http.StatusBadGateway, "api_error", "all upstreams failed")
 }
 
 func (h *Handler) doRequest(c *gin.Context, upstream *model.Upstream, body []byte) (*http.Response, error) {
@@ -749,7 +735,7 @@ func (h *Handler) doRequest(c *gin.Context, upstream *model.Upstream, body []byt
 	// 复制原始请求头
 	for key, vals := range c.Request.Header {
 		k := strings.ToLower(key)
-		if k == "host" {
+		if k == "host" || k == "content-length" {
 			continue
 		}
 		for _, v := range vals {
@@ -774,7 +760,7 @@ func (h *Handler) applyErrorMapping(statusCode int, resp *http.Response) (int, i
 				errBody := map[string]any{
 					"type": "error",
 					"error": map[string]any{
-						"type":    http.StatusText(m.TargetCode),
+						"type":    httpStatusToAnthropicError(m.TargetCode),
 						"message": m.Message,
 					},
 				}
@@ -787,10 +773,37 @@ func (h *Handler) applyErrorMapping(statusCode int, resp *http.Response) (int, i
 	return statusCode, resp.Body
 }
 
+// httpStatusToAnthropicError 将 HTTP 状态码映射为 Anthropic 错误类型
+func httpStatusToAnthropicError(code int) string {
+	switch code {
+	case 400:
+		return "invalid_request_error"
+	case 401:
+		return "authentication_error"
+	case 403:
+		return "permission_error"
+	case 404:
+		return "not_found_error"
+	case 408:
+		return "request_timeout"
+	case 413:
+		return "request_too_large"
+	case 429:
+		return "rate_limit_error"
+	case 529:
+		return "overloaded_error"
+	default:
+		return "api_error"
+	}
+}
+
 func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header http.Header, body io.ReadCloser) (Usage, []byte) {
 	defer body.Close()
 
 	for key, vals := range header {
+		if strings.ToLower(key) == "content-length" {
+			continue
+		}
 		for _, v := range vals {
 			c.Writer.Header().Add(key, v)
 		}
@@ -812,11 +825,9 @@ func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header 
 			if ok {
 				flusher.Flush()
 			}
-			// 错误响应时捕获内容用于日志
-			if statusCode >= 400 && sseBuf.Len() < maxLogBodySize {
-				sseBuf.WriteString(line)
-				sseBuf.WriteByte('\n')
-			}
+			// 捕获响应内容用于日志
+			sseBuf.WriteString(line)
+			sseBuf.WriteByte('\n')
 			// 从 SSE data 行提取 usage
 			if strings.HasPrefix(line, "data: ") {
 				data := line[6:]
@@ -848,9 +859,7 @@ func extractSSEUsage(data string, usage *Usage) {
 		Message *struct {
 			Usage Usage `json:"usage"`
 		} `json:"message"`
-		Usage *struct {
-			OutputTokens int `json:"output_tokens"`
-		} `json:"usage"`
+		Usage *Usage `json:"usage"`
 	}
 	if json.Unmarshal([]byte(data), &event) != nil {
 		return
@@ -859,12 +868,24 @@ func extractSSEUsage(data string, usage *Usage) {
 	case "message_start":
 		if event.Message != nil {
 			usage.InputTokens = event.Message.Usage.InputTokens
+			usage.OutputTokens = event.Message.Usage.OutputTokens
 			usage.CacheCreationInputTokens = event.Message.Usage.CacheCreationInputTokens
 			usage.CacheReadInputTokens = event.Message.Usage.CacheReadInputTokens
 		}
 	case "message_delta":
 		if event.Usage != nil {
-			usage.OutputTokens = event.Usage.OutputTokens
+			if event.Usage.OutputTokens > 0 {
+				usage.OutputTokens = event.Usage.OutputTokens
+			}
+			if event.Usage.InputTokens > 0 {
+				usage.InputTokens = event.Usage.InputTokens
+			}
+			if event.Usage.CacheCreationInputTokens > 0 {
+				usage.CacheCreationInputTokens = event.Usage.CacheCreationInputTokens
+			}
+			if event.Usage.CacheReadInputTokens > 0 {
+				usage.CacheReadInputTokens = event.Usage.CacheReadInputTokens
+			}
 		}
 	}
 }
@@ -872,6 +893,17 @@ func extractSSEUsage(data string, usage *Usage) {
 func isSSE(header http.Header) bool {
 	ct := header.Get("Content-Type")
 	return strings.Contains(ct, "text/event-stream")
+}
+
+// anthropicError 返回 Anthropic 规范格式的错误响应
+func anthropicError(c *gin.Context, statusCode int, errType string, message string) {
+	c.JSON(statusCode, gin.H{
+		"type": "error",
+		"error": gin.H{
+			"type":    errType,
+			"message": message,
+		},
+	})
 }
 
 func (h *Handler) markFault(upstreamID string, reason string) {
@@ -891,36 +923,52 @@ func (h *Handler) markFault(upstreamID string, reason string) {
 	}
 }
 
-// extractUserID 从请求体中提取会话标识
+// extractUserID 从请求体中提取会话标识和原始 user_id JSON
 // 兼容两种格式:
 //   - 旧版: metadata.user_id = "some-string"
 //   - 新版: metadata.user_id = {"device_id":"...","account_uuid":"...","session_id":"..."}
-func extractUserID(body []byte) string {
+func extractUserID(body []byte) (sessionKey string, rawUserID string) {
 	var req struct {
 		Metadata map[string]any `json:"metadata"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		return ""
+		return "", ""
 	}
 	if req.Metadata == nil {
-		return ""
+		return "", ""
 	}
 	uid := req.Metadata["user_id"]
 	if uid == nil {
-		return ""
+		return "", ""
 	}
+	// 序列化原始 user_id 用于展示
+	if raw, err := json.Marshal(uid); err == nil {
+		rawUserID = string(raw)
+	}
+	// 字符串类型：可能是纯字符串或双重编码的 JSON
 	if s, ok := uid.(string); ok {
-		return s
+		// 尝试解析双重编码的 JSON 对象
+		var inner map[string]any
+		if json.Unmarshal([]byte(s), &inner) == nil {
+			rawUserID = s // 用解码后的 JSON 作为 raw
+			if sid, ok := inner["session_id"].(string); ok && sid != "" {
+				return sid, rawUserID
+			}
+			if did, ok := inner["device_id"].(string); ok && did != "" {
+				return did, rawUserID
+			}
+		}
+		return s, rawUserID
 	}
 	if m, ok := uid.(map[string]any); ok {
 		if sid, ok := m["session_id"].(string); ok && sid != "" {
-			return sid
+			return sid, rawUserID
 		}
 		if did, ok := m["device_id"].(string); ok && did != "" {
-			return did
+			return did, rawUserID
 		}
 	}
-	return ""
+	return "", rawUserID
 }
 
 // parseRetryAfter 解析 retry-after header，支持秒数和 HTTP 日期格式

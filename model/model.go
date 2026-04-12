@@ -117,10 +117,12 @@ func DefaultFailoverRules() []FailoverRule {
 	return []FailoverRule{
 		{Code: 403, Action: "offline"},
 		{Code: 404, Action: "offline"},
+		{Code: 408, Action: "cooldown", CooldownS: 30},
 		{Code: 429, Action: "cooldown", CooldownS: 60, UseHeader: "retry-after"},
 		{Code: 500, Action: "offline"},
 		{Code: 502, Action: "offline"},
 		{Code: 503, Action: "offline"},
 		{Code: 504, Action: "offline"},
+		{Code: 529, Action: "cooldown", CooldownS: 30, UseHeader: "retry-after"},
 	}
 }
