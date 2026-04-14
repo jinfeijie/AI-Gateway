@@ -10,6 +10,7 @@ import (
 
 	"ai-gateway/health"
 	"ai-gateway/model"
+	"ai-gateway/proxy"
 	"ai-gateway/store"
 
 	"github.com/gin-gonic/gin"
@@ -20,7 +21,7 @@ type BalancerQuerier interface {
 	CooldownInfo() map[string]time.Time
 	SessionInfo() []any
 	RequestLogs() []any
-	RequestLogsRaw() []any                    // 返回原始 RequestLog 用于统计
+	RequestLogDetail(idx int) *proxy.RequestLog
 	DailyStats(pricing []model.ModelPricing) any // 聚合统计
 	LoadInfo() map[string]int64               // 上游当前并发数
 }

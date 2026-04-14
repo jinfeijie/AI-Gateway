@@ -186,7 +186,7 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
     </div>
   </div>
   <table>
-    <thead><tr><th>时间</th><th>上游</th><th>分组</th><th>结果</th><th>状态码</th><th>错误信息</th></tr></thead>
+    <thead><tr><th>时间</th><th>上游</th><th>分组</th><th>结果</th><th>状态码</th><th>错误信息</th><th>响应体</th></tr></thead>
     <tbody id="hc-hist-list"></tbody>
   </table>
 </div>
@@ -992,12 +992,13 @@ async function loadHistory() {
   const list = r.data || [];
   const tbody = document.getElementById('hc-hist-list');
   if (list.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;padding:20px">暂无记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#999;padding:20px">暂无记录</td></tr>';
     return;
   }
   tbody.innerHTML = list.map(e => {
     const t = new Date(e.checked_at * 1000).toLocaleString();
     const gn = groupName(e.group_id);
+    const rb = e.response_body ? `<details style="margin:0;max-width:300px"><summary style="cursor:pointer;font-size:12px;color:#999">查看</summary><pre style="font-size:11px;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow:auto;background:#f5f5f5;padding:4px;border-radius:4px;margin:4px 0 0">${e.response_body.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre></details>` : '-';
     return `<tr>
       <td style="font-size:12px;white-space:nowrap">${t}</td>
       <td>${e.remark || e.upstream_id.substring(0,8)}</td>
@@ -1005,6 +1006,7 @@ async function loadHistory() {
       <td class="${e.healthy ? 'status-active' : 'status-faulted'}">${e.healthy ? '健康' : '异常'}</td>
       <td>${e.status_code || '-'}</td>
       <td style="font-size:12px;color:#666">${e.error || '-'}</td>
+      <td style="font-size:12px">${rb}</td>
     </tr>`;
   }).join('');
 }
@@ -1345,9 +1347,9 @@ function renderReqLogs() {
     const actionMap = { success: '成功', failover: '故障转移', error: '错误' };
     const actionColor = { success: '#388e3c', failover: '#e65100', error: '#d32f2f' };
     const detail = e.detail || '-';
-    const hasExtra = detail.length > 30 || e.request_body || e.response_body;
+    const hasDetail = detail !== '-' && detail.length > 0;
     const shortDetail = detail.length > 60 ? detail.substring(0, 60) + '...' : detail;
-    const detailLabel = hasExtra ? (shortDetail === '-' ? '查看' : shortDetail) : detail;
+    const origIdx = reqLogs.indexOf(e);
     const fmtN = n => n ? n.toLocaleString() : '';
     let inputHtml = '-';
     if (e.input_tokens) {
@@ -1374,46 +1376,49 @@ function renderReqLogs() {
       <td style="font-size:12px;color:#e65100;font-weight:500;white-space:nowrap">${costHtml}</td>
       <td style="font-size:12px">${e.duration_ms}ms</td>
       <td style="color:${actionColor[e.action]||'#666'};font-weight:bold;font-size:13px">${actionMap[e.action]||e.action}</td>
-      <td style="font-size:12px;color:#666">${hasExtra ? `<span style="cursor:pointer;text-decoration:underline dotted" onclick="showLogDetail(${idx})">${detailLabel}</span>` : detail}</td>
+      <td style="font-size:12px;color:#666"><span style="cursor:pointer;text-decoration:underline dotted" onclick="showLogDetail(${origIdx})">${hasDetail ? shortDetail : '查看'}</span></td>
     </tr>`;
   }).join('');
 }
-function showLogDetail(idx) {
-  const filter = document.getElementById('rl-filter').value;
-  let list = reqLogs;
-  if (filter) list = list.filter(e => e.action === filter);
-  const e = list[idx];
-  if (!e) return;
-  const t = new Date(e.time * 1000).toLocaleString();
-  const actionMap = { success: '成功', failover: '故障转移', error: '错误' };
-  let html = `<div style="font-size:13px;line-height:2">
-    <b>时间：</b>${t}<br>
-    <b>分组：</b>${e.group_name || '-'}<br>
-    <b>模型：</b><code>${e.model || '-'}</code><br>
-    <b>上游：</b>${e.remark || '-'} <span style="color:#999">(${e.upstream_id || '-'})</span><br>
-    <b>客户端：</b>${e.client_ip || '-'}<br>
-    <b>请求ID：</b><code style="font-size:12px">${escHtml(e.request_id || '-')}</code><br>
-    <b>会话：</b><code style="font-size:12px;word-break:break-all">${escHtml(e.session_key || '-')}</code><br>
-    <b>状态码：</b>${e.status || '-'}<br>
-    <b>耗时：</b>${e.duration_ms}ms<br>
-    <b>结果：</b>${actionMap[e.action] || e.action}<br>
-  </div>`;
-  if (e.detail && e.detail !== '-') {
-    html += `<div style="margin-top:12px"><b>详情：</b></div>
-    <pre style="background:#1e1e2e;color:#cdd6f4;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${e.detail.replace(/</g,'&lt;')}</pre>`;
-  }
-  if (e.request_body) {
-    html += `<div style="margin-top:12px;display:flex;align-items:center;gap:8px"><b>请求体：</b><button class="btn btn-sm" style="padding:1px 8px;font-size:11px;background:#eee" onclick="copyText(reqLogs._detailEntry.request_body)">复制</button></div>
-    <pre style="background:#1e1e2e;color:#a6e3a1;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${e.request_body.replace(/</g,'&lt;')}</pre>`;
-  }
-  if (e.response_body) {
-    html += `<div style="margin-top:12px;display:flex;align-items:center;gap:8px"><b>响应体：</b><button class="btn btn-sm" style="padding:1px 8px;font-size:11px;background:#eee" onclick="copyText(reqLogs._detailEntry.response_body)">复制</button></div>
-    <pre style="background:#1e1e2e;color:#f38ba8;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${e.response_body.replace(/</g,'&lt;')}</pre>`;
-  }
-  reqLogs._detailEntry = e;
-  document.getElementById('log-detail-content').innerHTML = html;
+async function showLogDetail(idx) {
+  document.getElementById('log-detail-content').innerHTML = '<div style="text-align:center;padding:40px;color:#999">加载中...</div>';
   document.getElementById('log-detail-mask').style.display = 'block';
   document.getElementById('log-detail-modal').style.display = 'block';
+  try {
+    const r = await api('GET', `/request-logs/${idx}`);
+    const e = r.data;
+    if (!e) { document.getElementById('log-detail-content').innerHTML = '<div style="color:#d32f2f;padding:20px">未找到该日志</div>'; return; }
+    const t = new Date(e.time * 1000).toLocaleString();
+    const actionMap = { success: '成功', failover: '故障转移', error: '错误' };
+    let html = `<div style="font-size:13px;line-height:2">
+      <b>时间：</b>${t}<br>
+      <b>分组：</b>${e.group_name || '-'}<br>
+      <b>模型：</b><code>${e.model || '-'}</code><br>
+      <b>上游：</b>${e.remark || '-'} <span style="color:#999">(${e.upstream_id || '-'})</span><br>
+      <b>客户端：</b>${e.client_ip || '-'}<br>
+      <b>请求ID：</b><code style="font-size:12px">${escHtml(e.request_id || '-')}</code><br>
+      <b>会话：</b><code style="font-size:12px;word-break:break-all">${escHtml(e.session_key || '-')}</code><br>
+      <b>状态码：</b>${e.status || '-'}<br>
+      <b>耗时：</b>${e.duration_ms}ms<br>
+      <b>结果：</b>${actionMap[e.action] || e.action}<br>
+    </div>`;
+    if (e.detail && e.detail !== '-') {
+      html += `<div style="margin-top:12px"><b>详情：</b></div>
+      <pre style="background:#1e1e2e;color:#cdd6f4;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${e.detail.replace(/</g,'&lt;')}</pre>`;
+    }
+    if (e.request_body) {
+      html += `<div style="margin-top:12px;display:flex;align-items:center;gap:8px"><b>请求体：</b><button class="btn btn-sm" style="padding:1px 8px;font-size:11px;background:#eee" onclick="copyText(window._logDetailEntry.request_body)">复制</button></div>
+      <pre style="background:#1e1e2e;color:#a6e3a1;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${e.request_body.replace(/</g,'&lt;')}</pre>`;
+    }
+    if (e.response_body) {
+      html += `<div style="margin-top:12px;display:flex;align-items:center;gap:8px"><b>响应体：</b><button class="btn btn-sm" style="padding:1px 8px;font-size:11px;background:#eee" onclick="copyText(window._logDetailEntry.response_body)">复制</button></div>
+      <pre style="background:#1e1e2e;color:#f38ba8;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${e.response_body.replace(/</g,'&lt;')}</pre>`;
+    }
+    window._logDetailEntry = e;
+    document.getElementById('log-detail-content').innerHTML = html;
+  } catch(err) {
+    document.getElementById('log-detail-content').innerHTML = `<div style="color:#d32f2f;padding:20px">加载失败: ${err.message || err}</div>`;
+  }
 }
 function closeLogDetail() {
   document.getElementById('log-detail-mask').style.display = 'none';

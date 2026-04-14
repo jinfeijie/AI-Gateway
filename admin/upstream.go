@@ -2,6 +2,7 @@ package admin
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"ai-gateway/model"
@@ -229,6 +230,21 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 	// 请求日志
 	r.GET("/request-logs", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"data": bq.RequestLogs()})
+	})
+
+	// 单条日志详情（含完整 body）
+	r.GET("/request-logs/:idx", func(c *gin.Context) {
+		idx, err := strconv.Atoi(c.Param("idx"))
+		if err != nil || idx < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid index"})
+			return
+		}
+		entry := bq.RequestLogDetail(idx)
+		if entry == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": entry})
 	})
 
 	// 统计数据

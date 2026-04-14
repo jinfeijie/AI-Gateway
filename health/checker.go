@@ -47,13 +47,14 @@ type ProbeResult struct {
 
 // HistoryEntry 探测历史记录
 type HistoryEntry struct {
-	UpstreamID string `json:"upstream_id"`
-	Remark     string `json:"remark"`
-	GroupID    string `json:"group_id"`
-	Healthy    bool   `json:"healthy"`
-	StatusCode int    `json:"status_code"`
-	Error      string `json:"error,omitempty"`
-	CheckedAt  int64  `json:"checked_at"`
+	UpstreamID   string `json:"upstream_id"`
+	Remark       string `json:"remark"`
+	GroupID      string `json:"group_id"`
+	Healthy      bool   `json:"healthy"`
+	StatusCode   int    `json:"status_code"`
+	Error        string `json:"error,omitempty"`
+	ResponseBody string `json:"response_body,omitempty"`
+	CheckedAt    int64  `json:"checked_at"`
 }
 
 const maxHistory = 200
@@ -188,7 +189,7 @@ func (ch *Checker) checkAll() {
 		result := ch.Probe(u.API, u.APIKey, cfg.DefaultProbeModel, hc)
 
 		// 记录历史
-		ch.addHistory(HistoryEntry{
+		entry := HistoryEntry{
 			UpstreamID: u.ID,
 			Remark:     u.Remark,
 			GroupID:    u.GroupID,
@@ -196,7 +197,11 @@ func (ch *Checker) checkAll() {
 			StatusCode: result.StatusCode,
 			Error:      result.Error,
 			CheckedAt:  time.Now().Unix(),
-		})
+		}
+		if !result.Healthy && result.Body != "" {
+			entry.ResponseBody = result.Body
+		}
+		ch.addHistory(entry)
 
 		// 检查是否命中 cooldown 规则（如 429），不应标记为故障
 		if !result.Healthy && result.StatusCode > 0 {

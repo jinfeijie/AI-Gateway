@@ -56,6 +56,9 @@ type Usage struct {
 
 const maxRequestLogs = 500
 
+// cst 东八区时区，用于日统计的日期边界
+var cst = time.FixedZone("CST", 8*3600)
+
 // costEntry 异步费用更新
 type costEntry struct {
 	upstreamID string
@@ -99,24 +102,26 @@ func (h *Handler) addLog(entry RequestLog) {
 	}
 }
 
-// RequestLogs 返回请求日志（倒序）
+// RequestLogs 返回请求日志（倒序），剥离 body 字段减少传输量
 func (h *Handler) RequestLogs() []any {
 	logs := h.readLastLogs(maxRequestLogs)
 	result := make([]any, len(logs))
-	for i, e := range logs {
-		result[len(logs)-1-i] = e
+	for i := range logs {
+		logs[i].RequestBody = ""
+		logs[i].ResponseBody = ""
+		result[len(logs)-1-i] = logs[i]
 	}
 	return result
 }
 
-// RequestLogsRaw 返回原始日志用于统计
-func (h *Handler) RequestLogsRaw() []any {
+// RequestLogDetail 返回单条日志完整内容（含 body），idx 为倒序索引（0=最新）
+func (h *Handler) RequestLogDetail(idx int) *RequestLog {
 	logs := h.readLastLogs(maxRequestLogs)
-	result := make([]any, len(logs))
-	for i, e := range logs {
-		result[i] = e
+	rIdx := len(logs) - 1 - idx
+	if rIdx < 0 || rIdx >= len(logs) {
+		return nil
 	}
-	return result
+	return &logs[rIdx]
 }
 
 // UpstreamStats 单个上游的统计数据
@@ -166,7 +171,7 @@ func calcCost(log RequestLog, pricingMap map[string]model.ModelPricing) float64 
 
 // DailyStats 统计数据：花费/请求数从持久化文件读，延迟从近期日志算
 func (h *Handler) DailyStats(pricing []model.ModelPricing) any {
-	now := time.Now()
+	now := time.Now().In(cst)
 	today := now.Format("2006-01-02")
 
 	// 从日志算延迟（反映近期性能）
@@ -363,7 +368,7 @@ func (h *Handler) readLastLogs(n int) []RequestLog {
 scan:
 	f.Seek(readFrom, io.SeekStart)
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 256*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 256*1024), 4*1024*1024)
 	var logs []RequestLog
 	for scanner.Scan() {
 		var entry RequestLog
@@ -388,7 +393,7 @@ func (h *Handler) loadSiteStats() {
 	// 文件不存在，从日志文件回填
 	logs := h.readLastLogs(maxRequestLogs)
 	pm := h.pricingMap()
-	today := time.Now().Format("2006-01-02")
+	today := time.Now().In(cst).Format("2006-01-02")
 	h.siteStatsMu.Lock()
 	defer h.siteStatsMu.Unlock()
 	h.siteStats.TodayDate = today
@@ -399,7 +404,7 @@ func (h *Handler) loadSiteStats() {
 		cost := calcCost(l, pm)
 		h.siteStats.TotalCost += cost
 		h.siteStats.TotalRequests++
-		if time.Unix(l.Time, 0).Format("2006-01-02") == today {
+		if time.Unix(l.Time, 0).In(cst).Format("2006-01-02") == today {
 			h.siteStats.TodayCost += cost
 			h.siteStats.TodayRequests++
 		}
@@ -417,7 +422,7 @@ func (h *Handler) saveSiteStats() {
 func (h *Handler) addSiteCost(cost float64) {
 	h.siteStatsMu.Lock()
 	defer h.siteStatsMu.Unlock()
-	today := time.Now().Format("2006-01-02")
+	today := time.Now().In(cst).Format("2006-01-02")
 	if h.siteStats.TodayDate != today {
 		h.siteStats.TodayDate = today
 		h.siteStats.TodayCost = 0
@@ -450,7 +455,7 @@ func (h *Handler) loadUpstreamStats() {
 	// 文件不存在，从日志文件回填
 	logs := h.readLastLogs(maxRequestLogs)
 	pm := h.pricingMap()
-	today := time.Now().Format("2006-01-02")
+	today := time.Now().In(cst).Format("2006-01-02")
 	h.upstreamStatsMu.Lock()
 	defer h.upstreamStatsMu.Unlock()
 	h.upstreamStats = make(map[string]*UpstreamAccum)
@@ -466,7 +471,7 @@ func (h *Handler) loadUpstreamStats() {
 		cost := calcCost(l, pm)
 		acc.TotalCost += cost
 		acc.TotalRequests++
-		if time.Unix(l.Time, 0).Format("2006-01-02") == today {
+		if time.Unix(l.Time, 0).In(cst).Format("2006-01-02") == today {
 			acc.TodayCost += cost
 			acc.TodayRequests++
 		}
@@ -488,7 +493,7 @@ func (h *Handler) addUpstreamCost(upstreamID string, groupID string, cost float6
 		acc = &UpstreamAccum{}
 		h.upstreamStats[upstreamID] = acc
 	}
-	today := time.Now().Format("2006-01-02")
+	today := time.Now().In(cst).Format("2006-01-02")
 	if acc.TodayDate != today {
 		acc.TodayDate = today
 		acc.TodayCost = 0
