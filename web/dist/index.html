@@ -5,68 +5,89 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Gateway Admin</title>
 <style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; color: #333; }
+body { font-family: 'IBM Plex Sans', sans-serif; background: #0a0e1a; color: #e4e7eb; }
 .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-h1 { margin-bottom: 20px; font-size: 24px; }
-.tabs { display: flex; gap: 4px; margin-bottom: 20px; }
-.tab { padding: 8px 16px; border: none; background: #e0e0e0; cursor: pointer; border-radius: 4px 4px 0 0; font-size: 14px; }
-.tab.active { background: #fff; font-weight: bold; }
-.panel { display: none; background: #fff; padding: 20px; border-radius: 0 4px 4px 4px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+h1 { margin-bottom: 20px; font-size: 24px; font-family: 'JetBrains Mono', monospace; letter-spacing: -0.5px; color: #00ff88; text-transform: uppercase; }
+.tabs { display: flex; gap: 2px; margin-bottom: 20px; background: #151b2b; padding: 4px; border-radius: 2px; border: 1px solid #1f2937; }
+.tab { padding: 10px 18px; border: none; background: transparent; cursor: pointer; font-size: 13px; font-family: 'JetBrains Mono', monospace; color: #6b7280; transition: all 0.2s; text-transform: uppercase; letter-spacing: 0.5px; }
+.tab.active { background: #1f2937; color: #00ff88; box-shadow: inset 0 0 0 1px #00ff88; }
+.panel { display: none; background: #151b2b; padding: 24px; border-radius: 2px; border: 1px solid #1f2937; }
 .panel.active { display: block; }
 table { width: 100%; border-collapse: collapse; margin-top: 12px; table-layout: auto; }
-th, td { padding: 8px 12px; border-bottom: 1px solid #eee; text-align: left; font-size: 14px; white-space: nowrap; }
-th { background: #fafafa; font-weight: 600; }
+th, td { padding: 10px 14px; border-bottom: 1px solid #1f2937; text-align: left; font-size: 13px; white-space: nowrap; font-family: 'JetBrains Mono', monospace; background: transparent; }
+th { background: #0f1419; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; font-size: 11px; }
+tbody tr { background: transparent; }
+tbody tr:hover { background: rgba(0,255,136,0.05); }
 td.wrap { white-space: normal; word-break: break-all; }
-.btn { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
-.btn-primary { background: #1976d2; color: #fff; }
-.btn-danger { background: #d32f2f; color: #fff; }
-.btn-success { background: #388e3c; color: #fff; }
-.btn-warn { background: #f57c00; color: #fff; }
-.btn-sm { padding: 4px 10px; font-size: 12px; }
+input, select, textarea { background: #0f1419 !important; color: #e4e7eb !important; border: 1px solid #1f2937 !important; }
+table input, table select, table textarea { background: #0f1419 !important; color: #e4e7eb !important; border: 1px solid #1f2937 !important; font-family: 'JetBrains Mono', monospace !important; font-size: 12px !important; padding: 4px 8px !important; }
+code { background: #0f1419; color: #00ff88; padding: 2px 6px; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.btn { padding: 7px 16px; border: 1px solid; cursor: pointer; font-size: 12px; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.5px; transition: all 0.2s; }
+.btn-primary { background: transparent; color: #00ff88; border-color: #00ff88; }
+.btn-primary:hover { background: #00ff88; color: #0a0e1a; }
+.btn-danger { background: transparent; color: #ff4444; border-color: #ff4444; }
+.btn-danger:hover { background: #ff4444; color: #0a0e1a; }
+.btn-success { background: transparent; color: #00ff88; border-color: #00ff88; }
+.btn-success:hover { background: #00ff88; color: #0a0e1a; }
+.btn-warn { background: transparent; color: #ffaa00; border-color: #ffaa00; }
+.btn-warn:hover { background: #ffaa00; color: #0a0e1a; }
+.btn-sm { padding: 5px 12px; font-size: 11px; }
 .form-row { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
-.form-row input, .form-row select, .form-row textarea { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+.form-row input, .form-row select, .form-row textarea { padding: 8px 12px; border: 1px solid #1f2937; background: #0f1419; color: #e4e7eb; font-size: 13px; font-family: 'JetBrains Mono', monospace; }
 .form-row input { flex: 1; }
-.form-row textarea { flex: 1; min-height: 60px; font-family: monospace; }
-.status-active { color: #388e3c; font-weight: bold; }
-.status-faulted { color: #d32f2f; font-weight: bold; }
-.status-disabled { color: #999; }
-.status-cooldown { color: #e65100; font-weight: bold; }
-.status-halfopen { color: #1565c0; font-weight: bold; }
+.form-row textarea { flex: 1; min-height: 60px; font-family: 'JetBrains Mono', monospace; }
+.status-active { color: #00ff88; font-weight: bold; }
+.status-faulted { color: #ff4444; font-weight: bold; }
+.status-disabled { color: #6b7280; }
+.status-cooldown { color: #ffaa00; font-weight: bold; }
+.status-halfopen { color: #00aaff; font-weight: bold; }
 .actions { display: flex; gap: 4px; }
-.msg { padding: 8px 12px; margin-bottom: 12px; border-radius: 4px; font-size: 13px; }
-.msg-ok { background: #e8f5e9; color: #2e7d32; }
-.msg-err { background: #ffebee; color: #c62828; }
-label { font-size: 14px; font-weight: 500; min-width: 80px; }
-.login-wrap { max-width: 360px; margin: 100px auto; background: #fff; padding: 32px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
-.login-wrap h2 { margin-bottom: 20px; font-size: 20px; text-align: center; }
-.login-wrap input { width: 100%; padding: 10px 12px; margin-bottom: 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
-.login-wrap .btn { width: 100%; padding: 10px; font-size: 15px; }
-.login-err { color: #d32f2f; font-size: 13px; margin-bottom: 8px; text-align: center; }
-.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.msg { padding: 10px 14px; margin-bottom: 12px; font-size: 12px; font-family: 'JetBrains Mono', monospace; border-left: 3px solid; }
+.msg-ok { background: rgba(0,255,136,0.1); color: #00ff88; border-color: #00ff88; }
+.msg-err { background: rgba(255,68,68,0.1); color: #ff4444; border-color: #ff4444; }
+label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBrains Mono', monospace; color: #9ca3af; }
+.login-wrap { max-width: 360px; margin: 100px auto; background: #151b2b; padding: 32px; border: 1px solid #1f2937; }
+.login-wrap h2 { margin-bottom: 20px; font-size: 20px; text-align: center; font-family: 'JetBrains Mono', monospace; color: #00ff88; text-transform: uppercase; letter-spacing: 2px; }
+.login-wrap input { width: 100%; padding: 10px 12px; margin-bottom: 12px; border: 1px solid #1f2937; background: #0f1419; color: #e4e7eb; font-size: 13px; box-sizing: border-box; font-family: 'JetBrains Mono', monospace; }
+.login-wrap .btn { width: 100%; padding: 10px; font-size: 13px; }
+.login-err { color: #ff4444; font-size: 12px; margin-bottom: 8px; text-align: center; font-family: 'JetBrains Mono', monospace; }
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding: 16px; background: #151b2b; border: 1px solid #1f2937; }
 .header h1 { margin-bottom: 0; }
-.logout-btn { background: none; border: 1px solid #ccc; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; color: #666; }
-.modal-mask { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,.4); z-index:100; }
-.modal { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#fff; padding:24px; border-radius:8px; z-index:101; min-width:480px; max-width:600px; max-height:85vh; overflow-y:auto; box-shadow:0 4px 20px rgba(0,0,0,.2); }
-.modal h3 { margin-bottom:16px; font-size:16px; }
+.logout-btn { background: transparent; border: 1px solid #6b7280; padding: 6px 14px; cursor: pointer; font-size: 11px; color: #6b7280; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.5px; transition: all 0.2s; }
+.logout-btn:hover { border-color: #ff4444; color: #ff4444; }
+.modal-mask { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,.8); z-index:100; }
+.modal { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#151b2b; padding:24px; border:1px solid #1f2937; z-index:101; min-width:480px; max-width:600px; max-height:85vh; overflow-y:auto; }
+.modal h3 { margin-bottom:16px; font-size:15px; font-family:'JetBrains Mono',monospace; color:#00ff88; text-transform:uppercase; letter-spacing:1px; }
 .modal .form-row { margin-bottom:10px; }
 .modal .form-row input, .modal .form-row select { width:100%; }
 .modal-footer { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }
-.probe-info { display:flex; align-items:center; gap:12px; padding:12px; background:#f5f5f5; border-radius:6px; margin-bottom:16px; }
-.probe-info .icon { width:40px; height:40px; border-radius:8px; background:#1976d2; display:flex; align-items:center; justify-content:center; color:#fff; font-size:18px; flex-shrink:0; }
+.probe-info { display:flex; align-items:center; gap:12px; padding:12px; background:#0f1419; border:1px solid #1f2937; margin-bottom:16px; }
+.probe-info .icon { width:40px; height:40px; background:#00ff88; display:flex; align-items:center; justify-content:center; color:#0a0e1a; font-size:18px; flex-shrink:0; font-weight:bold; }
 .probe-info .detail { flex:1; min-width:0; }
-.probe-info .url { font-weight:600; font-size:14px; word-break:break-all; }
-.probe-info .meta { font-size:12px; color:#888; margin-top:2px; }
-.probe-info .st { font-size:13px; font-weight:600; margin-left:auto; flex-shrink:0; }
-.probe-log { background:#1e1e2e; color:#cdd6f4; border-radius:8px; padding:16px; font-family:'SF Mono',Menlo,monospace; font-size:13px; line-height:1.7; min-height:120px; max-height:260px; overflow-y:auto; margin-bottom:12px; }
-.probe-log .g { color:#a6e3a1; }
-.probe-log .y { color:#f9e2af; }
-.probe-log .r { color:#f38ba8; }
-.probe-log .c { color:#89b4fa; }
-.probe-log .d { color:#9399b2; }
-.probe-log hr { border:none; border-top:1px solid #45475a; margin:8px 0; }
-.probe-ok { color:#a6e3a1; font-weight:600; font-size:14px; }
-.probe-fail { color:#f38ba8; font-weight:600; font-size:14px; }
+.probe-info .url { font-weight:600; font-size:13px; word-break:break-all; font-family:'JetBrains Mono',monospace; color:#e4e7eb; }
+.probe-info .meta { font-size:11px; color:#6b7280; margin-top:2px; font-family:'JetBrains Mono',monospace; }
+.probe-info .st { font-size:12px; font-weight:600; margin-left:auto; flex-shrink:0; font-family:'JetBrains Mono',monospace; }
+.probe-log { background:#0f1419; color:#cdd6f4; border:1px solid #1f2937; padding:16px; font-family:'JetBrains Mono',monospace; font-size:12px; line-height:1.7; min-height:120px; max-height:260px; overflow-y:auto; margin-bottom:12px; }
+.probe-log .g { color:#00ff88; }
+.probe-log .y { color:#ffaa00; }
+.probe-log .r { color:#ff4444; }
+.probe-log .c { color:#00aaff; }
+.probe-log .d { color:#6b7280; }
+.probe-log hr { border:none; border-top:1px solid #1f2937; margin:8px 0; }
+.probe-ok { color:#00ff88; font-weight:600; font-size:13px; font-family:'JetBrains Mono',monospace; }
+.probe-fail { color:#ff4444; font-weight:600; font-size:13px; font-family:'JetBrains Mono',monospace; }
+.btn-info { background: transparent; color: #00aaff; border-color: #00aaff; }
+.btn-info:hover { background: #00aaff; color: #0a0e1a; }
+.btn-secondary { background: transparent; color: #6b7280; border-color: #6b7280; }
+.btn-secondary:hover { border-color: #9ca3af; color: #9ca3af; }
+.tag { display: inline-flex; align-items: center; gap: 4px; border: 1px solid; border-radius: 3px; padding: 3px 7px; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.tag-green { border-color: #00ff88; color: #00ff88; }
+.tag-blue { border-color: #00aaff; color: #00aaff; }
+.tag-dim { background: #1f2937; border-color: #374151; color: #9ca3af; }
+.tag-rm { cursor: pointer; color: #6b7280; font-size: 15px; line-height: 1; margin-left: 2px; }
+.tag-rm:hover { color: #ff4444; }
 </style>
 </head>
 <body>
@@ -157,9 +178,9 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
   <div class="form-row"><label>Body</label><textarea id="hc-body" placeholder="留空使用默认探测请求"></textarea></div>
   <div class="form-row"><button class="btn btn-primary" onclick="saveHealthCheck()">保存全局配置</button></div>
 
-  <hr style="margin:20px 0;border:none;border-top:1px solid #e2e8f0">
+  <hr style="margin:20px 0;border:none;border-top:1px solid #1f2937">
   <h4 style="margin:0 0 8px;font-size:15px">测活模型</h4>
-  <p style="font-size:13px;color:#666;margin:0 0 12px">配置手动测活和自动健康检查可用的模型列表，以及自动健康检查使用的默认模型。</p>
+  <p style="font-size:13px;color:#9ca3af;margin:0 0 12px">配置手动测活和自动健康检查可用的模型列表，以及自动健康检查使用的默认模型。</p>
   <div class="form-row">
     <label>默认模型</label>
     <select id="pm-default" style="width:240px" onchange="saveProbeModels()"></select>
@@ -171,15 +192,15 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
   </div>
   <div id="pm-list" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px"></div>
 
-  <hr style="margin:20px 0;border:none;border-top:1px solid #e2e8f0">
-  <h4 style="margin:0 0 12px;font-size:15px">分组配置 <span style="font-weight:normal;font-size:12px;color:#999">（留空使用全局配置）</span></h4>
+  <hr style="margin:20px 0;border:none;border-top:1px solid #1f2937">
+  <h4 style="margin:0 0 12px;font-size:15px">分组配置 <span style="font-weight:normal;font-size:12px;color:#6b7280">（留空使用全局配置）</span></h4>
   <div id="hc-groups"></div>
 
-  <hr style="margin:20px 0;border:none;border-top:1px solid #e2e8f0">
+  <hr style="margin:20px 0;border:none;border-top:1px solid #1f2937">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
     <h4 style="margin:0;font-size:15px">检查历史</h4>
     <div style="display:flex;gap:8px;align-items:center">
-      <select id="hc-hist-filter" onchange="loadHistory()" style="padding:4px 8px;font-size:13px;border:1px solid #ccc;border-radius:4px">
+      <select id="hc-hist-filter" onchange="loadHistory()" style="padding:4px 8px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb">
         <option value="">全部上游</option>
       </select>
       <button class="btn btn-sm" onclick="loadHistory()">刷新</button>
@@ -193,7 +214,7 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
 
 <!-- 故障转移 -->
 <div id="failover" class="panel">
-  <p style="font-size:13px;color:#666;margin-bottom:16px">当上游返回指定状态码时，按规则执行动作：<b>下线</b>（标记故障）或<b>冷却</b>（暂停接收流量一段时间后自动恢复）。每个分组可独立配置，留空使用默认规则。</p>
+  <p style="font-size:13px;color:#9ca3af;margin-bottom:16px">当上游返回指定状态码时，按规则执行动作：<b>下线</b>（标记故障）或<b>冷却</b>（暂停接收流量一段时间后自动恢复）。每个分组可独立配置，留空使用默认规则。</p>
   <div id="fo-list"></div>
 </div>
 
@@ -211,9 +232,9 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
     <tbody id="em-list"></tbody>
   </table>
 
-  <hr style="margin:24px 0;border:none;border-top:1px solid #e2e8f0">
+  <hr style="margin:24px 0;border:none;border-top:1px solid #1f2937">
   <h4 style="margin:0 0 8px;font-size:15px">字段剔除</h4>
-  <p style="font-size:13px;color:#666;margin:0 0 12px">转发前从请求体中删除指定字段，避免上游返回 "Extra inputs are not permitted" 错误。支持通配符 <code>*</code> 匹配数组元素。</p>
+  <p style="font-size:13px;color:#9ca3af;margin:0 0 12px">转发前从请求体中删除指定字段，避免上游返回 "Extra inputs are not permitted" 错误。支持通配符 <code>*</code> 匹配数组元素。</p>
   <div class="form-row">
     <input id="sf-input" placeholder="字段路径，如 betas 或 system.*.cache_control.*.scope" style="font-family:monospace">
     <button class="btn btn-primary" onclick="addStripField()">添加</button>
@@ -224,7 +245,7 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
 <!-- 会话亲和 -->
 <div id="sessions" class="panel">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-    <p style="font-size:13px;color:#666;margin:0">当前活跃的会话绑定关系，TTL 5 分钟无活动自动清除。</p>
+    <p style="font-size:13px;color:#9ca3af;margin:0">当前活跃的会话绑定关系，TTL 5 分钟无活动自动清除。</p>
     <button class="btn btn-sm" onclick="loadSessions()">刷新</button>
   </div>
   <div id="sess-stats" style="margin-bottom:12px;font-size:13px"></div>
@@ -238,7 +259,7 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
 <!-- 限流配置 -->
 <div id="ratelimit" class="panel">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-    <p style="font-size:13px;color:#666;margin:0">配置分组和上游的最大并发数，0 表示不限制。当前并发数每 3 秒自动刷新。</p>
+    <p style="font-size:13px;color:#9ca3af;margin:0">配置分组和上游的最大并发数，0 表示不限制。当前并发数每 3 秒自动刷新。</p>
     <button class="btn btn-sm" onclick="loadRateLimit()">刷新</button>
   </div>
   <h4 style="margin:12px 0 8px">分组限流</h4>
@@ -252,9 +273,9 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
 
 <div id="reqlog" class="panel">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-    <p style="font-size:13px;color:#666;margin:0">最近 500 条代理请求记录，持久化存储于 data/logs/ 目录。</p>
+    <p style="font-size:13px;color:#9ca3af;margin:0">最近 500 条代理请求记录，持久化存储于 data/logs/ 目录。</p>
     <div style="display:flex;gap:8px;align-items:center">
-      <select id="rl-filter" onchange="renderReqLogs()" style="padding:4px 8px;font-size:13px;border:1px solid #ccc;border-radius:4px">
+      <select id="rl-filter" onchange="renderReqLogs()" style="padding:4px 8px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb">
         <option value="">全部</option>
         <option value="success">成功</option>
         <option value="failover">故障转移</option>
@@ -275,7 +296,7 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
 <div id="log-detail-modal" class="modal" style="display:none;max-width:700px">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
     <h3 style="margin:0">请求详情</h3>
-    <span style="cursor:pointer;font-size:20px;color:#999" onclick="closeLogDetail()">&times;</span>
+    <span style="cursor:pointer;font-size:20px;color:#6b7280" onclick="closeLogDetail()">&times;</span>
   </div>
   <div id="log-detail-content"></div>
   <div class="modal-footer">
@@ -302,10 +323,10 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
 <div id="gm-modal" class="modal" style="display:none">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
     <h3 style="margin:0" id="gm-title">分组支持模型</h3>
-    <span style="cursor:pointer;font-size:20px;color:#999" onclick="closeGroupModelsModal()">&times;</span>
+    <span style="cursor:pointer;font-size:20px;color:#6b7280" onclick="closeGroupModelsModal()">&times;</span>
   </div>
   <input type="hidden" id="gm-id">
-  <p style="font-size:13px;color:#666;margin:0 0 12px">配置该分组支持的模型，留空表示不限制。请求中的 model 不在列表中的将不会路由到该分组的上游。</p>
+  <p style="font-size:13px;color:#9ca3af;margin:0 0 12px">配置该分组支持的模型，留空表示不限制。请求中的 model 不在列表中的将不会路由到该分组的上游。</p>
   <div class="form-row">
     <input id="gm-input" placeholder="输入模型ID，如 claude-sonnet-4-6" style="font-family:monospace">
     <button class="btn btn-primary" onclick="addGroupModel()">添加</button>
@@ -322,7 +343,7 @@ label { font-size: 14px; font-weight: 500; min-width: 80px; }
 <div id="probe-modal" class="modal" style="display:none">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
     <h3 style="margin:0" id="probe-title">测试账号连接</h3>
-    <span style="cursor:pointer;font-size:20px;color:#999" onclick="closeProbeModal()">&times;</span>
+    <span style="cursor:pointer;font-size:20px;color:#6b7280" onclick="closeProbeModal()">&times;</span>
   </div>
   <div id="probe-info-area" style="max-height:40vh;overflow-y:auto"></div>
   <div class="form-row"><label>选择测试模型</label>
@@ -434,23 +455,23 @@ async function loadGroups() {
   const groupStats = (sr.data && sr.data.groups) || {};
   const tbody = document.getElementById('g-list');
   tbody.innerHTML = groups.map(g => {
-    const models = (g.models && g.models.length) ? g.models.map(m => `<span style="background:#e3f2fd;border:1px solid #90caf9;border-radius:3px;padding:1px 5px;font-size:11px;font-family:monospace">${m}</span>`).join(' ') : '<span style="color:#999;font-size:12px">不限</span>';
+    const models = (g.models && g.models.length) ? g.models.map(m => `<span class="tag tag-green" style="font-size:11px">${m}</span>`).join(' ') : '<span style="color:#6b7280;font-size:12px">不限</span>';
     const gs = groupStats[g.id] || {};
     const todayCost = gs.today_cost ? '$' + gs.today_cost.toFixed(4) : '-';
     const totalCost = gs.total_cost ? '$' + gs.total_cost.toFixed(4) : '-';
     return `<tr>
-    <td style="font-size:12px;color:#999">${g.id.substring(0,8)}</td>
+    <td style="font-size:12px;color:#6b7280">${g.id.substring(0,8)}</td>
     <td>${g.name}</td>
     <td style="max-width:300px">${models}</td>
-    <td style="font-size:13px;color:#388e3c;font-weight:500">${todayCost}</td>
-    <td style="font-size:13px;color:#e65100;font-weight:500">${totalCost}</td>
+    <td style="font-size:13px;color:#00ff88;font-weight:500">${todayCost}</td>
+    <td style="font-size:13px;color:#ffaa00;font-weight:500">${totalCost}</td>
     <td style="font-size:12px;font-family:monospace">
       <span id="gk-${g.id}" style="user-select:all">${g.api_key || '-'}</span>
-      <button class="btn btn-sm" style="margin-left:4px;padding:2px 6px;font-size:11px;background:#eee" onclick="copyKey('${g.id}')" title="复制">&#128203;</button>
-      <button class="btn btn-sm" style="padding:2px 6px;font-size:11px;background:#eee" onclick="regenKey('${g.id}')" title="重新生成">&#8635;</button>
+      <button class="btn btn-secondary btn-sm" style="margin-left:4px;padding:2px 6px;font-size:11px" onclick="copyKey('${g.id}')" title="复制">&#128203;</button>
+      <button class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:11px" onclick="regenKey('${g.id}')" title="重新生成">&#8635;</button>
     </td>
     <td class="actions">
-      <button class="btn btn-sm" style="background:#607d8b;color:#fff" onclick="editGroupModels('${g.id}')">模型</button>
+      <button class="btn btn-info btn-sm" onclick="editGroupModels('${g.id}')">模型</button>
       <button class="btn btn-danger btn-sm" onclick="delGroup('${g.id}')">删除</button>
     </td>
   </tr>`;
@@ -502,10 +523,10 @@ function closeGroupModelsModal() {
 function renderGmTags() {
   const container = document.getElementById('gm-tags');
   if (gmModels.length === 0) {
-    container.innerHTML = '<span style="color:#999;font-size:13px">未配置，不限制模型</span>';
+    container.innerHTML = '<span style="color:#6b7280;font-size:13px">未配置，不限制模型</span>';
     return;
   }
-  container.innerHTML = gmModels.map((m, i) => `<span style="display:inline-flex;align-items:center;gap:4px;background:#e3f2fd;border:1px solid #90caf9;border-radius:4px;padding:4px 8px;font-family:monospace;font-size:13px">${m}<span style="cursor:pointer;color:#999;font-size:16px;line-height:1" onclick="removeGroupModel(${i})">&times;</span></span>`).join('');
+  container.innerHTML = gmModels.map((m, i) => `<span class="tag tag-green">${m}<span class="tag-rm" onclick="removeGroupModel(${i})">&times;</span></span>`).join('');
 }
 function addGroupModel() {
   const input = document.getElementById('gm-input');
@@ -545,30 +566,30 @@ function renderFailover() {
   container.innerHTML = groups.map(g => {
     const rules = foEditing[g.id] || ((g.failover_rules && g.failover_rules.length) ? g.failover_rules : defaultRules);
     const isDefault = !(g.failover_rules && g.failover_rules.length);
-    return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:16px">
+    return `<div style="border:1px solid #374151;border-radius:8px;padding:16px;margin-bottom:16px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
         <span style="font-weight:600;font-size:15px">${g.name}</span>
-        ${isDefault ? '<span style="font-size:12px;color:#999;background:#f1f5f9;padding:2px 8px;border-radius:4px">使用默认规则</span>' : ''}
+        ${isDefault ? '<span style="font-size:12px;color:#6b7280;background:#1f2937;padding:2px 8px;border-radius:4px">使用默认规则</span>' : ''}
       </div>
       <table style="width:100%;margin-bottom:8px">
         <thead><tr><th>状态码</th><th>动作</th><th>冷却秒数</th><th>读取 Header</th><th>操作</th></tr></thead>
         <tbody id="fo-rules-${g.id}">
           ${rules.map((r,i) => `<tr>
-            <td><input type="number" value="${r.code}" data-gid="${g.id}" data-idx="${i}" data-field="code" style="width:70px;padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px;font-family:monospace" onchange="foFieldChange(this)"></td>
-            <td><select data-gid="${g.id}" data-idx="${i}" data-field="action" style="padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px" onchange="foFieldChange(this)">
+            <td><input type="number" value="${r.code}" data-gid="${g.id}" data-idx="${i}" data-field="code" style="width:70px;padding:4px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb;font-family:monospace" onchange="foFieldChange(this)"></td>
+            <td><select data-gid="${g.id}" data-idx="${i}" data-field="action" style="padding:4px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb" onchange="foFieldChange(this)">
               <option value="offline" ${r.action==='offline'?'selected':''}>下线</option>
               <option value="cooldown" ${r.action==='cooldown'?'selected':''}>冷却</option>
             </select></td>
-            <td><input type="number" value="${r.action==='cooldown'?(r.cooldown_s||60):''}" data-gid="${g.id}" data-idx="${i}" data-field="cooldown_s" ${r.action!=='cooldown'?'disabled':''} style="width:70px;padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px;font-family:monospace" placeholder="60" onchange="foFieldChange(this)"></td>
-            <td><input value="${r.use_header||''}" data-gid="${g.id}" data-idx="${i}" data-field="use_header" ${r.action!=='cooldown'?'disabled':''} style="width:120px;padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px;font-family:monospace" placeholder="retry-after" onchange="foFieldChange(this)"></td>
+            <td><input type="number" value="${r.action==='cooldown'?(r.cooldown_s||60):''}" data-gid="${g.id}" data-idx="${i}" data-field="cooldown_s" ${r.action!=='cooldown'?'disabled':''} style="width:70px;padding:4px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb;font-family:monospace" placeholder="60" onchange="foFieldChange(this)"></td>
+            <td><input value="${r.use_header||''}" data-gid="${g.id}" data-idx="${i}" data-field="use_header" ${r.action!=='cooldown'?'disabled':''} style="width:120px;padding:4px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb;font-family:monospace" placeholder="retry-after" onchange="foFieldChange(this)"></td>
             <td><button class="btn btn-danger btn-sm" onclick="foDeleteRule('${g.id}',${i})">删除</button></td>
           </tr>`).join('')}
         </tbody>
       </table>
       <div style="display:flex;gap:8px">
-        <button class="btn btn-sm" onclick="foAddRule('${g.id}')" style="font-size:12px">+ 添加规则</button>
+        <button class="btn btn-secondary btn-sm" onclick="foAddRule('${g.id}')">+ 添加规则</button>
         <button class="btn btn-primary btn-sm" onclick="foSave('${g.id}','${g.name}')">保存</button>
-        ${!isDefault ? '<button class="btn btn-sm" onclick="foReset(\''+g.id+'\',\''+g.name+'\')" style="font-size:12px;color:#999">恢复默认</button>' : ''}
+        ${!isDefault ? '<button class="btn btn-secondary btn-sm" onclick="foReset(\''+g.id+'\',\''+g.name+'\')">恢复默认</button>' : ''}
       </div>
     </div>`;
   }).join('');
@@ -680,11 +701,11 @@ async function loadUpstreams() {
     }
     let fault = '-';
     if (u.faulted_at) {
-      fault = `<span style="color:#d32f2f">${u.fault_type === 'manual' ? '手动' : '自动'}</span><br>${new Date(u.faulted_at*1000).toLocaleString()}`;
+      fault = `<span style="color:#ff4444">${u.fault_type === 'manual' ? '手动' : '自动'}</span><br>${new Date(u.faulted_at*1000).toLocaleString()}`;
       if (u.fault_reason) {
         const reason = u.fault_reason.length > 80 ? u.fault_reason.substring(0, 80) + '...' : u.fault_reason;
-        fault += `<br><span style="color:#666">${escHtml(reason)}</span>`;
-        fault += `<br><button class="btn btn-sm" style="margin-top:2px;padding:1px 6px;font-size:11px;background:#eee" onclick="copyFault('${u.id}')">复制</button>`;
+        fault += `<br><span style="color:#9ca3af">${escHtml(reason)}</span>`;
+        fault += `<br><button class="btn btn-secondary btn-sm" style="margin-top:2px;padding:1px 6px;font-size:11px" onclick="copyFault('${u.id}')">复制</button>`;
       }
     }
     const st = stats[u.id] || {};
@@ -697,17 +718,17 @@ async function loadUpstreams() {
       <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(u.remark || '')}">${u.remark || '-'}</td>
       <td style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(u.api)}">${escHtml(u.api)}</td>
       <td>${groupName(u.group_id)}</td>
-      <td style="font-size:11px;overflow:hidden">${(u.models && u.models.length) ? '<div style="display:flex;flex-direction:column;gap:2px">' + u.models.map(m => '<span style="display:inline-block;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:3px;padding:1px 4px;font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + m + '</span>').join('') + '</div>' : '<span style="color:#999">继承分组</span>'}</td>
+      <td style="font-size:11px;overflow:hidden">${(u.models && u.models.length) ? '<div style="display:flex;flex-direction:column;gap:2px">' + u.models.map(m => '<span class="tag tag-dim" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + m + '</span>').join('') + '</div>' : '<span style="color:#6b7280">继承分组</span>'}</td>
       <td class="${sc}">${statusLabel}${statusExtra}</td>
-      <td style="font-size:12px;color:#1976d2">${ttfb}</td>
-      <td style="font-size:12px;color:#1976d2">${latency}</td>
-      <td style="font-size:12px;color:#555">${todayReqs}</td>
-      <td style="font-size:12px;color:#388e3c;font-weight:500">${todayCost}</td>
-      <td style="font-size:12px;color:#e65100;font-weight:500">${totalCost}</td>
+      <td style="font-size:12px;color:#00aaff">${ttfb}</td>
+      <td style="font-size:12px;color:#00aaff">${latency}</td>
+      <td style="font-size:12px;color:#9ca3af">${todayReqs}</td>
+      <td style="font-size:12px;color:#00ff88;font-weight:500">${todayCost}</td>
+      <td style="font-size:12px;color:#ffaa00;font-weight:500">${totalCost}</td>
       <td style="font-size:12px;white-space:normal;word-break:break-all;overflow:hidden">${fault}</td>
       <td class="actions">
         <button class="btn btn-primary btn-sm" onclick="editUp('${u.id}')">编辑</button>
-        <button class="btn btn-sm" style="background:#607d8b;color:#fff" onclick="probeUp('${u.id}')">测活</button>
+        <button class="btn btn-info btn-sm" onclick="probeUp('${u.id}')">测活</button>
         ${u.status === 'active' || u.status === 'half_open' ? `<button class="btn btn-warn btn-sm" onclick="faultUp('${u.id}')">标记故障</button>` : ''}
         ${u.status === 'faulted' ? `<button class="btn btn-success btn-sm" onclick="recoverUp('${u.id}')">恢复</button>` : ''}
         <button class="btn btn-danger btn-sm" onclick="delUp('${u.id}')">删除</button>
@@ -719,11 +740,11 @@ async function loadUpstreams() {
   const siteTodayCost = siteStats.today_cost || 0;
   const siteTotalCost = siteStats.total_cost || 0;
   const siteTotalReqs = siteStats.total_requests || 0;
-  document.getElementById('u-foot').innerHTML = `<tr style="background:#fafafa;font-weight:600">
+  document.getElementById('u-foot').innerHTML = `<tr style="background:#0f1419;border-top:2px solid #00ff88;font-weight:600">
     <td colspan="7" style="text-align:right">全站合计</td>
-    <td style="color:#555">${siteTodayReqs}</td>
-    <td style="color:#388e3c">$${siteTodayCost.toFixed(4)}</td>
-    <td style="color:#e65100">$${siteTotalCost.toFixed(4)} (${siteTotalReqs}次)</td>
+    <td style="color:#9ca3af">${siteTodayReqs}</td>
+    <td style="color:#00ff88">$${siteTodayCost.toFixed(4)}</td>
+    <td style="color:#ffaa00">$${siteTotalCost.toFixed(4)} (${siteTotalReqs}次)</td>
     <td colspan="2"></td>
   </tr>`;
   startCooldownTimers();
@@ -942,18 +963,18 @@ function renderGroupHealthCheck() {
   container.innerHTML = groups.map(g => {
     const hc = g.health_check || {};
     const hasConfig = !!g.health_check;
-    return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:12px">
+    return `<div style="border:1px solid #374151;border-radius:8px;padding:12px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <span style="font-weight:600">${g.name}</span>
-        ${hasConfig ? '<span style="font-size:12px;color:#388e3c;background:#e8f5e9;padding:2px 8px;border-radius:4px">独立配置</span>' : '<span style="font-size:12px;color:#999;background:#f1f5f9;padding:2px 8px;border-radius:4px">使用全局</span>'}
+        ${hasConfig ? '<span style="font-size:12px;color:#00ff88;background:rgba(0,255,136,0.1);padding:2px 8px;border-radius:4px">独立配置</span>' : '<span style="font-size:12px;color:#6b7280;background:#1f2937;padding:2px 8px;border-radius:4px">使用全局</span>'}
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <label style="min-width:auto;font-size:13px">启用</label><input type="checkbox" id="ghc-en-${g.id}" ${(hasConfig ? hc.enabled : false) ? 'checked' : ''}>
-        <label style="min-width:auto;font-size:13px">间隔</label><input type="number" id="ghc-int-${g.id}" value="${hc.interval_s || ''}" placeholder="全局" style="width:60px;padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px">
-        <label style="min-width:auto;font-size:13px">重试</label><input type="number" id="ghc-ret-${g.id}" value="${hc.retries || ''}" placeholder="全局" style="width:50px;padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px">
-        <label style="min-width:auto;font-size:13px">超时</label><input type="number" id="ghc-to-${g.id}" value="${hc.timeout_s || ''}" placeholder="全局" style="width:50px;padding:4px;font-size:13px;border:1px solid #ccc;border-radius:4px">
+        <label style="min-width:auto;font-size:13px">间隔</label><input type="number" id="ghc-int-${g.id}" value="${hc.interval_s || ''}" placeholder="全局" style="width:60px;padding:4px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb">
+        <label style="min-width:auto;font-size:13px">重试</label><input type="number" id="ghc-ret-${g.id}" value="${hc.retries || ''}" placeholder="全局" style="width:50px;padding:4px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb">
+        <label style="min-width:auto;font-size:13px">超时</label><input type="number" id="ghc-to-${g.id}" value="${hc.timeout_s || ''}" placeholder="全局" style="width:50px;padding:4px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb">
         <button class="btn btn-primary btn-sm" onclick="saveGroupHC('${g.id}','${g.name}')">保存</button>
-        ${hasConfig ? `<button class="btn btn-sm" onclick="clearGroupHC('${g.id}','${g.name}')" style="font-size:12px;color:#999">恢复全局</button>` : ''}
+        ${hasConfig ? `<button class="btn btn-secondary btn-sm" onclick="clearGroupHC('${g.id}','${g.name}')">恢复全局</button>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -992,20 +1013,20 @@ async function loadHistory() {
   const list = r.data || [];
   const tbody = document.getElementById('hc-hist-list');
   if (list.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#999;padding:20px">暂无记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#6b7280;padding:20px">暂无记录</td></tr>';
     return;
   }
   tbody.innerHTML = list.map(e => {
     const t = new Date(e.checked_at * 1000).toLocaleString();
     const gn = groupName(e.group_id);
-    const rb = e.response_body ? `<details style="margin:0;max-width:300px"><summary style="cursor:pointer;font-size:12px;color:#999">查看</summary><pre style="font-size:11px;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow:auto;background:#f5f5f5;padding:4px;border-radius:4px;margin:4px 0 0">${e.response_body.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre></details>` : '-';
+    const rb = e.response_body ? `<details style="margin:0;max-width:300px"><summary style="cursor:pointer;font-size:12px;color:#6b7280">查看</summary><pre style="font-size:11px;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow:auto;background:#0f1419;padding:4px;border-radius:4px;margin:4px 0 0">${e.response_body.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre></details>` : '-';
     return `<tr>
       <td style="font-size:12px;white-space:nowrap">${t}</td>
       <td>${e.remark || e.upstream_id.substring(0,8)}</td>
       <td>${gn}</td>
       <td class="${e.healthy ? 'status-active' : 'status-faulted'}">${e.healthy ? '健康' : '异常'}</td>
       <td>${e.status_code || '-'}</td>
-      <td style="font-size:12px;color:#666">${e.error || '-'}</td>
+      <td style="font-size:12px;color:#9ca3af">${e.error || '-'}</td>
       <td style="font-size:12px">${rb}</td>
     </tr>`;
   }).join('');
@@ -1044,12 +1065,12 @@ function renderProbeModels() {
   // 模型标签列表
   const container = document.getElementById('pm-list');
   if (probeModels.length === 0) {
-    container.innerHTML = '<span style="color:#999;font-size:13px">未配置</span>';
+    container.innerHTML = '<span style="color:#6b7280;font-size:13px">未配置</span>';
     return;
   }
   container.innerHTML = probeModels.map((m, i) => {
     const isDef = m === defaultProbeModel;
-    return `<span style="display:inline-flex;align-items:center;gap:4px;background:${isDef ? '#e3f2fd' : '#f1f5f9'};border:1px solid ${isDef ? '#90caf9' : '#e2e8f0'};border-radius:4px;padding:4px 8px;font-family:monospace;font-size:13px">${m}${isDef ? ' <span style="color:#1565c0;font-size:11px">(默认)</span>' : ''}<span style="cursor:pointer;color:#999;font-size:16px;line-height:1" onclick="delProbeModel(${i})">&times;</span></span>`;
+    return `<span class="tag ${isDef ? 'tag-blue' : 'tag-green'}">${m}${isDef ? ' <span style="font-size:11px">(默认)</span>' : ''}<span class="tag-rm" onclick="delProbeModel(${i})">&times;</span></span>`;
   }).join('');
 }
 function updateProbeModelSelect() {
@@ -1125,10 +1146,10 @@ async function loadStripFields() {
 function renderStripFields() {
   const container = document.getElementById('sf-list');
   if (stripFields.length === 0) {
-    container.innerHTML = '<span style="color:#999;font-size:13px">未配置，所有字段原样转发</span>';
+    container.innerHTML = '<span style="color:#6b7280;font-size:13px">未配置，所有字段原样转发</span>';
     return;
   }
-  container.innerHTML = stripFields.map((f, i) => `<span style="display:inline-flex;align-items:center;gap:4px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:4px;padding:4px 8px;font-family:monospace;font-size:13px">${f}<span style="cursor:pointer;color:#999;font-size:16px;line-height:1" onclick="delStripField(${i})">&times;</span></span>`).join('');
+  container.innerHTML = stripFields.map((f, i) => `<span class="tag tag-dim">${f}<span class="tag-rm" onclick="delStripField(${i})">&times;</span></span>`).join('');
 }
 async function addStripField() {
   const input = document.getElementById('sf-input');
@@ -1166,9 +1187,9 @@ async function loadSessions() {
   const boundReqs = logs.filter(e => e.session_key && e.session_key !== '').length;
   const unboundReqs = totalReqs - boundReqs;
   const tbody = document.getElementById('sess-list');
-  document.getElementById('sess-stats').innerHTML = `<span style="margin-right:16px">活跃会话: <b>${list.length}</b></span><span style="margin-right:16px">亲和请求: <b style="color:#388e3c">${boundReqs}</b></span><span>未亲和请求: <b style="color:#e65100">${unboundReqs}</b></span><span style="color:#999;margin-left:8px">(近 ${totalReqs} 条)</span>`;
+  document.getElementById('sess-stats').innerHTML = `<span style="margin-right:16px">活跃会话: <b>${list.length}</b></span><span style="margin-right:16px">亲和请求: <b style="color:#00ff88">${boundReqs}</b></span><span>未亲和请求: <b style="color:#ffaa00">${unboundReqs}</b></span><span style="color:#6b7280;margin-left:8px">(近 ${totalReqs} 条)</span>`;
   if (list.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#999;padding:20px">暂无会话绑定</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#6b7280;padding:20px">暂无会话绑定</td></tr>';
     return;
   }
   const now = Date.now() / 1000;
@@ -1194,19 +1215,19 @@ async function loadSessions() {
     const uid = parseUserID(raw);
     if (uid) {
         const rows = [];
-        if (uid.device_id) rows.push(`<div><span style="color:#999;font-size:11px">device</span> <code style="font-size:12px;user-select:all">${escHtml(uid.device_id)}</code> <button class="btn btn-sm" style="padding:0 4px;font-size:10px;background:#eee" onclick="copyText('${escAttr(uid.device_id)}')">&#128203;</button></div>`);
-        if (uid.session_id) rows.push(`<div><span style="color:#999;font-size:11px">session</span> <code style="font-size:12px;user-select:all">${escHtml(uid.session_id)}</code> <button class="btn btn-sm" style="padding:0 4px;font-size:10px;background:#eee" onclick="copyText('${escAttr(uid.session_id)}')">&#128203;</button></div>`);
-        if (uid.account_uuid) rows.push(`<div><span style="color:#999;font-size:11px">account</span> <code style="font-size:12px;user-select:all">${escHtml(uid.account_uuid)}</code> <button class="btn btn-sm" style="padding:0 4px;font-size:10px;background:#eee" onclick="copyText('${escAttr(uid.account_uuid)}')">&#128203;</button></div>`);
+        if (uid.device_id) rows.push(`<div><span style="color:#6b7280;font-size:11px">device</span> <code style="font-size:12px;user-select:all">${escHtml(uid.device_id)}</code> <button class="btn btn-secondary btn-sm" style="padding:0 4px;font-size:10px" onclick="copyText('${escAttr(uid.device_id)}')">&#128203;</button></div>`);
+        if (uid.session_id) rows.push(`<div><span style="color:#6b7280;font-size:11px">session</span> <code style="font-size:12px;user-select:all">${escHtml(uid.session_id)}</code> <button class="btn btn-secondary btn-sm" style="padding:0 4px;font-size:10px" onclick="copyText('${escAttr(uid.session_id)}')">&#128203;</button></div>`);
+        if (uid.account_uuid) rows.push(`<div><span style="color:#6b7280;font-size:11px">account</span> <code style="font-size:12px;user-select:all">${escHtml(uid.account_uuid)}</code> <button class="btn btn-secondary btn-sm" style="padding:0 4px;font-size:10px" onclick="copyText('${escAttr(uid.account_uuid)}')">&#128203;</button></div>`);
         if (rows.length) { idHtml = rows.join(''); } else { idHtml = `<code style="font-size:12px">${escHtml(raw)}</code>`; }
     } else {
-      idHtml = `<code style="font-size:12px;user-select:all">${escHtml(raw)}</code> <button class="btn btn-sm" style="padding:0 4px;font-size:10px;background:#eee" onclick="copyText('${escAttr(raw)}')">&#128203;</button>`;
+      idHtml = `<code style="font-size:12px;user-select:all">${escHtml(raw)}</code> <button class="btn btn-secondary btn-sm" style="padding:0 4px;font-size:10px" onclick="copyText('${escAttr(raw)}')">&#128203;</button>`;
     }
     return `<tr>
       <td style="max-width:400px">${idHtml}</td>
       <td>${uLabel}</td>
       <td style="font-size:13px;font-weight:600">${s.req_count || 1}</td>
       <td style="font-size:12px">${t}</td>
-      <td style="font-size:12px;color:${remain < 60 ? '#e65100' : '#666'}">${remain}s</td>
+      <td style="font-size:12px;color:${remain < 60 ? '#ffaa00' : '#6b7280'}">${remain}s</td>
     </tr>`;
   }).join('');
 }
@@ -1238,7 +1259,7 @@ async function loadRateLimit() {
     return `<tr>
       <td>${escHtml(g.name)}</td>
       <td><input type="number" min="0" value="${max}" style="width:80px" id="rl-g-${g.id}"></td>
-      <td style="color:${overload ? '#d32f2f' : '#333'};font-weight:${overload ? '600' : '400'}">${cur}${max > 0 ? ' / ' + max : ''}</td>
+      <td style="color:${overload ? '#ff4444' : '#e4e7eb'};font-weight:${overload ? '600' : '400'}">${cur}${max > 0 ? ' / ' + max : ''}</td>
       <td><button class="btn btn-primary btn-sm" onclick="saveGroupConcurrency('${g.id}','${escAttr(g.name)}')">保存</button></td>
     </tr>`;
   }).join('');
@@ -1255,7 +1276,7 @@ async function loadRateLimit() {
   for (const g of groups) {
     const gUps = groupedUps[g.id] || [];
     if (gUps.length === 0) continue;
-    sectionsHtml += `<h5 style="margin:12px 0 6px;color:#1565c0">${escHtml(g.name)}</h5>
+    sectionsHtml += `<h5 style="margin:12px 0 6px;color:#00aaff">${escHtml(g.name)}</h5>
     <table><thead><tr><th>备注</th><th>API</th><th>最大并发</th><th>当前并发</th><th>操作</th></tr></thead><tbody>`;
     for (const u of gUps) {
       const cur = conc[u.id] || 0;
@@ -1265,7 +1286,7 @@ async function loadRateLimit() {
         <td>${u.remark || '-'}</td>
         <td style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px" title="${escAttr(u.api)}">${escHtml(u.api)}</td>
         <td><input type="number" min="0" value="${max}" style="width:80px" id="rl-u-${u.id}"></td>
-        <td style="color:${overload ? '#d32f2f' : '#333'};font-weight:${overload ? '600' : '400'}">${cur}${max > 0 ? ' / ' + max : ''}</td>
+        <td style="color:${overload ? '#ff4444' : '#e4e7eb'};font-weight:${overload ? '600' : '400'}">${cur}${max > 0 ? ' / ' + max : ''}</td>
         <td><button class="btn btn-primary btn-sm" onclick="saveUpstreamConcurrency('${u.id}')">保存</button></td>
       </tr>`;
     }
@@ -1284,14 +1305,14 @@ async function loadRateLimit() {
         for (const u of ups) { if (u.group_id === g.id) cur2 += (conc2[u.id] || 0); }
         const max2 = g.max_concurrency || 0;
         const td = document.querySelector(`#rl-g-${g.id}`)?.parentElement?.nextElementSibling;
-        if (td) { td.textContent = cur2 + (max2 > 0 ? ' / ' + max2 : ''); td.style.color = (max2 > 0 && cur2 >= max2) ? '#d32f2f' : '#333'; }
+        if (td) { td.textContent = cur2 + (max2 > 0 ? ' / ' + max2 : ''); td.style.color = (max2 > 0 && cur2 >= max2) ? '#ff4444' : '#e4e7eb'; }
       }
       // 更新上游当前并发
       for (const u of ups) {
         const cur2 = conc2[u.id] || 0;
         const max2 = u.max_concurrency || 0;
         const td = document.querySelector(`#rl-u-${u.id}`)?.parentElement?.nextElementSibling;
-        if (td) { td.textContent = cur2 + (max2 > 0 ? ' / ' + max2 : ''); td.style.color = (max2 > 0 && cur2 >= max2) ? '#d32f2f' : '#333'; }
+        if (td) { td.textContent = cur2 + (max2 > 0 ? ' / ' + max2 : ''); td.style.color = (max2 > 0 && cur2 >= max2) ? '#ff4444' : '#e4e7eb'; }
       }
     } else { clearInterval(rlTimer); rlTimer = null; }
   }, 3000);
@@ -1339,13 +1360,13 @@ function renderReqLogs() {
   if (filter) list = list.filter(e => e.action === filter);
   const tbody = document.getElementById('rl-list');
   if (list.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#999;padding:20px">暂无记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#6b7280;padding:20px">暂无记录</td></tr>';
     return;
   }
   tbody.innerHTML = list.map((e, idx) => {
     const t = new Date(e.time * 1000).toLocaleString();
     const actionMap = { success: '成功', failover: '故障转移', error: '错误' };
-    const actionColor = { success: '#388e3c', failover: '#e65100', error: '#d32f2f' };
+    const actionColor = { success: '#00ff88', failover: '#ffaa00', error: '#ff4444' };
     const detail = e.detail || '-';
     const hasDetail = detail !== '-' && detail.length > 0;
     const shortDetail = detail.length > 60 ? detail.substring(0, 60) + '...' : detail;
@@ -1357,7 +1378,7 @@ function renderReqLogs() {
       const cacheParts = [];
       if (e.cache_read_tokens) cacheParts.push('缓存读 ' + fmtN(e.cache_read_tokens));
       if (e.cache_write_tokens) cacheParts.push('写 ' + fmtN(e.cache_write_tokens));
-      if (cacheParts.length) inputHtml += `<br><span style="font-size:11px;color:#999">${cacheParts.join(' · ')}</span>`;
+      if (cacheParts.length) inputHtml += `<br><span style="font-size:11px;color:#6b7280">${cacheParts.join(' · ')}</span>`;
     }
     let outputHtml = '-';
     if (e.output_tokens) {
@@ -1373,28 +1394,28 @@ function renderReqLogs() {
       <td>${e.status || '-'}</td>
       <td style="white-space:nowrap">${inputHtml}</td>
       <td style="white-space:nowrap">${outputHtml}</td>
-      <td style="font-size:12px;color:#e65100;font-weight:500;white-space:nowrap">${costHtml}</td>
+      <td style="font-size:12px;color:#ffaa00;font-weight:500;white-space:nowrap">${costHtml}</td>
       <td style="font-size:12px">${e.duration_ms}ms</td>
       <td style="color:${actionColor[e.action]||'#666'};font-weight:bold;font-size:13px">${actionMap[e.action]||e.action}</td>
-      <td style="font-size:12px;color:#666"><span style="cursor:pointer;text-decoration:underline dotted" onclick="showLogDetail(${origIdx})">${hasDetail ? shortDetail : '查看'}</span></td>
+      <td style="font-size:12px;color:#9ca3af"><span style="cursor:pointer;text-decoration:underline dotted" onclick="showLogDetail(${origIdx})">${hasDetail ? shortDetail : '查看'}</span></td>
     </tr>`;
   }).join('');
 }
 async function showLogDetail(idx) {
-  document.getElementById('log-detail-content').innerHTML = '<div style="text-align:center;padding:40px;color:#999">加载中...</div>';
+  document.getElementById('log-detail-content').innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280">加载中...</div>';
   document.getElementById('log-detail-mask').style.display = 'block';
   document.getElementById('log-detail-modal').style.display = 'block';
   try {
     const r = await api('GET', `/request-logs/${idx}`);
     const e = r.data;
-    if (!e) { document.getElementById('log-detail-content').innerHTML = '<div style="color:#d32f2f;padding:20px">未找到该日志</div>'; return; }
+    if (!e) { document.getElementById('log-detail-content').innerHTML = '<div style="color:#ff4444;padding:20px">未找到该日志</div>'; return; }
     const t = new Date(e.time * 1000).toLocaleString();
     const actionMap = { success: '成功', failover: '故障转移', error: '错误' };
     let html = `<div style="font-size:13px;line-height:2">
       <b>时间：</b>${t}<br>
       <b>分组：</b>${e.group_name || '-'}<br>
       <b>模型：</b><code>${e.model || '-'}</code><br>
-      <b>上游：</b>${e.remark || '-'} <span style="color:#999">(${e.upstream_id || '-'})</span><br>
+      <b>上游：</b>${e.remark || '-'} <span style="color:#6b7280">(${e.upstream_id || '-'})</span><br>
       <b>客户端：</b>${e.client_ip || '-'}<br>
       <b>请求ID：</b><code style="font-size:12px">${escHtml(e.request_id || '-')}</code><br>
       <b>会话：</b><code style="font-size:12px;word-break:break-all">${escHtml(e.session_key || '-')}</code><br>
@@ -1407,17 +1428,17 @@ async function showLogDetail(idx) {
       <pre style="background:#1e1e2e;color:#cdd6f4;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${e.detail.replace(/</g,'&lt;')}</pre>`;
     }
     if (e.request_body) {
-      html += `<div style="margin-top:12px;display:flex;align-items:center;gap:8px"><b>请求体：</b><button class="btn btn-sm" style="padding:1px 8px;font-size:11px;background:#eee" onclick="copyText(window._logDetailEntry.request_body)">复制</button></div>
+      html += `<div style="margin-top:12px;display:flex;align-items:center;gap:8px"><b>请求体：</b><button class="btn btn-secondary btn-sm" style="padding:1px 8px;font-size:11px" onclick="copyText(window._logDetailEntry.request_body)">复制</button></div>
       <pre style="background:#1e1e2e;color:#a6e3a1;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${e.request_body.replace(/</g,'&lt;')}</pre>`;
     }
     if (e.response_body) {
-      html += `<div style="margin-top:12px;display:flex;align-items:center;gap:8px"><b>响应体：</b><button class="btn btn-sm" style="padding:1px 8px;font-size:11px;background:#eee" onclick="copyText(window._logDetailEntry.response_body)">复制</button></div>
+      html += `<div style="margin-top:12px;display:flex;align-items:center;gap:8px"><b>响应体：</b><button class="btn btn-secondary btn-sm" style="padding:1px 8px;font-size:11px" onclick="copyText(window._logDetailEntry.response_body)">复制</button></div>
       <pre style="background:#1e1e2e;color:#f38ba8;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${e.response_body.replace(/</g,'&lt;')}</pre>`;
     }
     window._logDetailEntry = e;
     document.getElementById('log-detail-content').innerHTML = html;
   } catch(err) {
-    document.getElementById('log-detail-content').innerHTML = `<div style="color:#d32f2f;padding:20px">加载失败: ${err.message || err}</div>`;
+    document.getElementById('log-detail-content').innerHTML = `<div style="color:#ff4444;padding:20px">加载失败: ${err.message || err}</div>`;
   }
 }
 function closeLogDetail() {
