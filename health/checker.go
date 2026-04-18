@@ -169,6 +169,33 @@ func (ch *Checker) checkAll() {
 			continue
 		}
 
+		// registry 上游：心跳过期检测，不走 HTTP 探测
+		if u.Source == "registry" {
+			ttl := cfg.HeartbeatTTL
+			if ttl <= 0 {
+				ttl = 30
+			}
+			if u.HeartbeatAt != nil {
+				elapsed := time.Now().Unix() - *u.HeartbeatAt
+				if elapsed > int64(ttl) && u.Status != "faulted" {
+					log.Printf("[health] registry upstream %s (%s) heartbeat expired (%ds > %ds)", u.ID, u.Remark, elapsed, ttl)
+					now := time.Now().Unix()
+					ch.store.Update(func(c *model.Config) {
+						for i := range c.Upstreams {
+							if c.Upstreams[i].ID == u.ID {
+								c.Upstreams[i].Status = "faulted"
+								c.Upstreams[i].FaultedAt = &now
+								c.Upstreams[i].FaultType = "auto"
+								c.Upstreams[i].FaultReason = "heartbeat expired"
+								return
+							}
+						}
+					})
+				}
+			}
+			continue
+		}
+
 		// 按分组查找配置，分组无配置用全局
 		hc := globalHC
 		if ghc, ok := groupHC[u.GroupID]; ok {

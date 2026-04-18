@@ -18,9 +18,12 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 	r.POST("/groups", func(c *gin.Context) {
 		var req struct {
 			Name          string                  `json:"name" binding:"required"`
+			Protocols     []string                `json:"protocols"`
 			Models        []string                `json:"models"`
 			FailoverRules []model.FailoverRule     `json:"failover_rules"`
 			HealthCheck   *model.HealthCheckConfig `json:"health_check"`
+			LogMode       string                  `json:"log_mode"`
+			LogSampleRate *int                    `json:"log_sample_rate"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -30,9 +33,14 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 			ID:            uuid.New().String(),
 			Name:          req.Name,
 			APIKey:        "sk-" + uuid.New().String(),
+			Protocols:     req.Protocols,
 			Models:        req.Models,
 			FailoverRules: req.FailoverRules,
 			HealthCheck:   req.HealthCheck,
+			LogMode:       req.LogMode,
+		}
+		if req.LogSampleRate != nil {
+			g.LogSampleRate = *req.LogSampleRate
 		}
 		if err := s.Update(func(cfg *model.Config) {
 			cfg.Groups = append(cfg.Groups, g)
@@ -47,10 +55,13 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 		id := c.Param("id")
 		var req struct {
 			Name           string                  `json:"name" binding:"required"`
+			Protocols      []string                `json:"protocols"`
 			Models         []string                `json:"models"`
 			MaxConcurrency *int                    `json:"max_concurrency"`
 			FailoverRules  []model.FailoverRule     `json:"failover_rules"`
 			HealthCheck    *model.HealthCheckConfig `json:"health_check"`
+			LogMode        *string                 `json:"log_mode"`
+			LogSampleRate  *int                    `json:"log_sample_rate"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -61,6 +72,9 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 			for i := range cfg.Groups {
 				if cfg.Groups[i].ID == id {
 					cfg.Groups[i].Name = req.Name
+					if req.Protocols != nil {
+						cfg.Groups[i].Protocols = req.Protocols
+					}
 					if req.Models != nil {
 						cfg.Groups[i].Models = req.Models
 					}
@@ -72,6 +86,12 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 					}
 					if req.MaxConcurrency != nil {
 						cfg.Groups[i].MaxConcurrency = *req.MaxConcurrency
+					}
+					if req.LogMode != nil {
+						cfg.Groups[i].LogMode = *req.LogMode
+					}
+					if req.LogSampleRate != nil {
+						cfg.Groups[i].LogSampleRate = *req.LogSampleRate
 					}
 					found = true
 					return

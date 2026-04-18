@@ -20,8 +20,8 @@ import (
 type BalancerQuerier interface {
 	CooldownInfo() map[string]time.Time
 	SessionInfo() []any
-	RequestLogs() []any
-	RequestLogDetail(idx int) *proxy.RequestLog
+	RequestLogs(groupID string) []any
+	RequestLogDetail(idx int, groupID string) *proxy.RequestLog
 	DailyStats(pricing []model.ModelPricing) any // 聚合统计
 	LoadInfo() map[string]int64               // 上游当前并发数
 }

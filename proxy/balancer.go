@@ -173,6 +173,10 @@ func (b *Balancer) Pick(groupID string, sessionKey string, rawUserID string, req
 	var actives []model.Upstream
 	for _, u := range cfg.Upstreams {
 		if u.GroupID == groupID && (u.Status == "active" || u.Status == "half_open") && !exclude[u.ID] && !b.InCooldown(u.ID) {
+			// Weight=0 暂停流量，不参与任何选取（含会话亲和）
+			if u.EffectiveWeight() == 0 {
+				continue
+			}
 			// 并发限流：超过最大并发数时跳过
 			if u.MaxConcurrency > 0 && b.GetLoad(u.ID) >= int64(u.MaxConcurrency) {
 				continue
@@ -241,15 +245,26 @@ func (b *Balancer) pickLeastLoad(actives []model.Upstream) model.Upstream {
 			minLoad = load
 		}
 	}
-	// 收集所有最小负载的上游，随机选一个
+	// 收集所有最小负载的上游，按权重加权随机选取
 	var candidates []int
+	totalWeight := 0
 	for i, u := range actives {
 		if b.GetLoad(u.ID) == minLoad {
 			candidates = append(candidates, i)
+			totalWeight += u.EffectiveWeight()
 		}
 	}
-	idx := candidates[rand.Intn(len(candidates))]
-	return actives[idx]
+	// 加权随机
+	r := rand.Intn(totalWeight)
+	for _, ci := range candidates {
+		w := actives[ci].EffectiveWeight()
+		r -= w
+		if r < 0 {
+			return actives[ci]
+		}
+	}
+	// fallback（理论上不会到这里）
+	return actives[candidates[len(candidates)-1]]
 }
 
 // IncLoad 请求开始时增加负载计数

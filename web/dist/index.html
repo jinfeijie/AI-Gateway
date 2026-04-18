@@ -121,11 +121,10 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
 <!-- 分组管理 -->
 <div id="groups" class="panel active">
   <div class="form-row">
-    <input id="g-name" placeholder="分组名称">
-    <button class="btn btn-primary" onclick="addGroup()">添加分组</button>
+    <button class="btn btn-primary" onclick="showAddGroupModal()">添加分组</button>
   </div>
   <table>
-    <thead><tr><th>ID</th><th>名称</th><th>支持模型</th><th>今日花费</th><th>总花费</th><th>API Key</th><th>操作</th></tr></thead>
+    <thead><tr><th>ID</th><th>名称</th><th>协议</th><th>支持模型</th><th>日志模式</th><th>今日花费</th><th>总花费</th><th>API Key</th><th>操作</th></tr></thead>
     <tbody id="g-list"></tbody>
   </table>
 </div>
@@ -133,24 +132,18 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
 <!-- 上游管理 -->
 <div id="upstreams" class="panel">
   <div class="form-row">
-    <select id="u-group"></select>
-    <input id="u-api" placeholder="API 地址 (如 https://api.anthropic.com)">
-    <input id="u-key" placeholder="API Key">
-    <input id="u-remark" placeholder="备注">
-    <button class="btn btn-primary" onclick="addUpstream()">添加</button>
-  </div>
-  <div class="form-row">
-    <label>按分组过滤:</label>
-    <select id="u-filter" onchange="loadUpstreams()"><option value="">全部</option></select>
+    <select id="u-group" onchange="loadUpstreams()"></select>
+    <button class="btn btn-primary" onclick="showAddForm()">添加</button>
     <button class="btn btn-primary" onclick="batchProbe()" id="batch-probe-btn">批量测活</button>
   </div>
   <div style="overflow-x:auto">
-  <table style="table-layout:fixed;min-width:1280px">
+  <table style="table-layout:fixed;min-width:1345px">
     <colgroup>
       <col style="width:80px">
       <col style="width:140px">
       <col style="width:60px">
       <col style="width:130px">
+      <col style="width:65px">
       <col style="width:60px">
       <col style="width:60px">
       <col style="width:60px">
@@ -160,7 +153,7 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
       <col style="width:140px">
       <col style="width:260px">
     </colgroup>
-    <thead><tr><th>备注</th><th>API</th><th>分组</th><th>模型</th><th>状态</th><th>首包延迟</th><th>延迟</th><th>今日请求</th><th>今日花费</th><th>总花费</th><th>故障信息</th><th>操作</th></tr></thead>
+    <thead><tr><th>备注</th><th>API</th><th>分组</th><th>模型</th><th>权重/来源</th><th>状态</th><th>首包延迟</th><th>延迟</th><th>今日请求</th><th>今日花费</th><th>总花费</th><th>故障信息</th><th>操作</th></tr></thead>
     <tbody id="u-list"></tbody>
     <tfoot id="u-foot"></tfoot>
   </table>
@@ -214,7 +207,7 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
 
 <!-- 故障转移 -->
 <div id="failover" class="panel">
-  <p style="font-size:13px;color:#9ca3af;margin-bottom:16px">当上游返回指定状态码时，按规则执行动作：<b>下线</b>（标记故障）或<b>冷却</b>（暂停接收流量一段时间后自动恢复）。每个分组可独立配置，留空使用默认规则。</p>
+  <p style="font-size:13px;color:#9ca3af;margin-bottom:16px">当上游返回指定状态码时，按规则执行动作：<b>下线</b>（标记故障）、<b>冷却</b>（暂停接收流量一段时间后自动恢复）、<b>重试</b>（允许同节点重试）或<b>换节点重试</b>（排除当前节点后重试）。每个分组可独立配置，留空使用默认规则。</p>
   <div id="fo-list"></div>
 </div>
 
@@ -275,8 +268,11 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
     <p style="font-size:13px;color:#9ca3af;margin:0">最近 500 条代理请求记录，持久化存储于 data/logs/ 目录。</p>
     <div style="display:flex;gap:8px;align-items:center">
+      <select id="rl-group-filter" onchange="loadReqLogs()" style="padding:4px 8px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb">
+        <option value="">全部分组</option>
+      </select>
       <select id="rl-filter" onchange="renderReqLogs()" style="padding:4px 8px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb">
-        <option value="">全部</option>
+        <option value="">全部状态</option>
         <option value="success">成功</option>
         <option value="failover">故障转移</option>
         <option value="error">错误</option>
@@ -311,30 +307,110 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
   <div class="form-row"><label>API 地址</label><input id="edit-api"></div>
   <div class="form-row"><label>API Key</label><input id="edit-key" placeholder="留空则不修改"></div>
   <div class="form-row"><label>备注</label><input id="edit-remark"></div>
-  <div class="form-row"><label>支持模型</label><input id="edit-models" placeholder="逗号分隔，留空继承分组" style="font-family:monospace"></div>
+  <div class="form-row"><label>权重</label><input type="number" id="edit-weight" min="0" style="width:80px"><span style="font-size:12px;color:#6b7280;margin-left:8px">设为 0 暂停接收流量</span></div>
+  <div class="form-row"><label>禁止覆盖</label><input type="checkbox" id="edit-no-override"><span style="font-size:12px;color:#6b7280;margin-left:8px">勾选后注册中心无法覆盖此上游配置</span></div>
+  <div class="form-row" style="align-items:flex-start"><label>支持模型</label><div id="edit-models-area" style="flex:1"></div></div>
   <div class="modal-footer">
     <button class="btn" onclick="closeEditModal()">取消</button>
     <button class="btn btn-primary" onclick="saveEditUpstream()">保存</button>
   </div>
 </div>
 
-<!-- 分组模型编辑弹窗 -->
-<div id="gm-mask" class="modal-mask" onclick="closeGroupModelsModal()"></div>
+<!-- 添加分组弹窗 -->
+<div id="add-group-mask" class="modal-mask" onclick="hideAddGroupModal()"></div>
+<div id="add-group-modal" class="modal" style="display:none">
+  <h3>添加分组</h3>
+  <div class="form-row"><label>分组名称</label><input id="g-name" placeholder="输入分组名称"></div>
+  <div class="form-row" style="align-items:flex-start"><label>协议</label>
+    <div id="g-protocols" style="flex:1;display:flex;flex-wrap:wrap;gap:6px">
+      <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="g-proto-cb" value="anthropic" checked><span class="tag tag-green" style="font-size:12px">Anthropic Claude</span></label>
+      <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="g-proto-cb" value="openai"><span class="tag tag-blue" style="font-size:12px">OpenAI</span></label>
+      <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="g-proto-cb" value="openai-response"><span class="tag tag-blue" style="font-size:12px">OpenAI Response</span></label>
+    </div>
+  </div>
+  <div style="margin-top:8px"><label style="display:block;margin-bottom:8px">日志记录</label>
+    <div class="form-row">
+      <label>记录模式</label>
+      <select id="g-logmode" style="width:180px" onchange="gLogModeChange()">
+        <option value="all">全开</option>
+        <option value="error_only">仅错误</option>
+        <option value="random">随机记录</option>
+        <option value="random_session">随机会话亲和记录</option>
+        <option value="off">关闭</option>
+      </select>
+    </div>
+    <div class="form-row" id="g-samplerate-row" style="display:none">
+      <label>采样率(%)</label>
+      <input type="number" id="g-samplerate" min="1" max="100" value="10" style="width:80px">
+      <span style="font-size:12px;color:#6b7280;margin-left:8px">1-100，默认 10%</span>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn" onclick="hideAddGroupModal()">取消</button>
+    <button class="btn btn-primary" onclick="addGroup()">确认添加</button>
+  </div>
+</div>
+
+<!-- 添加上游弹窗 -->
+<div id="add-mask" class="modal-mask" onclick="hideAddForm()"></div>
+<div id="add-modal" class="modal" style="display:none">
+  <h3>添加上游</h3>
+  <div class="form-row"><label>API 地址</label><input id="u-api" placeholder="如 https://api.anthropic.com"></div>
+  <div class="form-row"><label>API Key</label><input id="u-key" placeholder="API Key"></div>
+  <div class="form-row"><label>备注</label><input id="u-remark" placeholder="备注（可选）"></div>
+  <div class="form-row"><label>权重</label><input type="number" id="u-weight" min="0" value="1" style="width:80px"><span style="font-size:12px;color:#6b7280;margin-left:8px">设为 0 暂停接收流量，默认 1</span></div>
+  <div class="form-row"><label>禁止覆盖</label><input type="checkbox" id="u-no-override"><span style="font-size:12px;color:#6b7280;margin-left:8px">勾选后注册中心无法覆盖此上游配置</span></div>
+  <div class="modal-footer">
+    <button class="btn" onclick="hideAddForm()">取消</button>
+    <button class="btn btn-primary" onclick="addUpstream()">确认添加</button>
+  </div>
+</div>
+
+<!-- 分组编辑弹窗 -->
+<div id="gm-mask" class="modal-mask" onclick="closeGroupEditModal()"></div>
 <div id="gm-modal" class="modal" style="display:none">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-    <h3 style="margin:0" id="gm-title">分组支持模型</h3>
-    <span style="cursor:pointer;font-size:20px;color:#6b7280" onclick="closeGroupModelsModal()">&times;</span>
+    <h3 style="margin:0" id="gm-title">编辑分组</h3>
+    <span style="cursor:pointer;font-size:20px;color:#6b7280" onclick="closeGroupEditModal()">&times;</span>
   </div>
   <input type="hidden" id="gm-id">
-  <p style="font-size:13px;color:#9ca3af;margin:0 0 12px">配置该分组支持的模型，留空表示不限制。请求中的 model 不在列表中的将不会路由到该分组的上游。</p>
-  <div class="form-row">
-    <input id="gm-input" placeholder="输入模型ID，如 claude-sonnet-4-6" style="font-family:monospace">
-    <button class="btn btn-primary" onclick="addGroupModel()">添加</button>
+  <div class="form-row"><label>分组名称</label><input id="gm-name" placeholder="分组名称"></div>
+  <div class="form-row" style="align-items:flex-start"><label>协议</label>
+    <div id="gm-protocols" style="flex:1;display:flex;flex-wrap:wrap;gap:6px">
+      <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="gm-proto-cb" value="anthropic"><span class="tag tag-green" style="font-size:12px">Anthropic Claude</span></label>
+      <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="gm-proto-cb" value="openai"><span class="tag tag-blue" style="font-size:12px">OpenAI</span></label>
+      <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="gm-proto-cb" value="openai-response"><span class="tag tag-blue" style="font-size:12px">OpenAI Response</span></label>
+    </div>
   </div>
-  <div id="gm-tags" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;min-height:30px"></div>
+  <div style="margin-top:12px"><label style="display:block;margin-bottom:8px">支持模型</label>
+    <p style="font-size:12px;color:#6b7280;margin:0 0 8px">配置该分组支持的模型，留空表示不限制</p>
+    <div class="form-row">
+      <input id="gm-input" placeholder="输入模型ID，如 claude-sonnet-4-6" style="font-family:monospace">
+      <button class="btn btn-primary" onclick="addGroupModel()">添加</button>
+    </div>
+    <div id="gm-tags" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;min-height:30px"></div>
+  </div>
+  <div style="margin-top:12px"><label style="display:block;margin-bottom:8px">日志记录</label>
+    <div class="form-row">
+      <label>记录模式</label>
+      <select id="gm-logmode" style="width:180px" onchange="gmLogModeChange()">
+        <option value="all">全开</option>
+        <option value="error_only">仅错误</option>
+        <option value="random">随机记录</option>
+        <option value="random_session">随机会话亲和记录</option>
+        <option value="off">关闭</option>
+      </select>
+    </div>
+    <div class="form-row" id="gm-samplerate-row" style="display:none">
+      <label>采样率(%)</label>
+      <input type="number" id="gm-samplerate" min="1" max="100" value="10" style="width:80px">
+      <span style="font-size:12px;color:#6b7280;margin-left:8px">1-100，默认 10%</span>
+    </div>
+    <p id="gm-logmode-desc" style="font-size:12px;color:#6b7280;margin:4px 0 0"></p>
+  </div>
   <div class="modal-footer">
-    <button class="btn" onclick="closeGroupModelsModal()">关闭</button>
-    <button class="btn btn-primary" onclick="saveGroupModels()">保存</button>
+    <button class="btn" onclick="closeGroupEditModal()">取消</button>
+    <button class="btn btn-primary" onclick="saveGroupEdit()">保存</button>
   </div>
 </div>
 
@@ -455,14 +531,23 @@ async function loadGroups() {
   const groupStats = (sr.data && sr.data.groups) || {};
   const tbody = document.getElementById('g-list');
   tbody.innerHTML = groups.map(g => {
+    const protoNames = { anthropic: 'Anthropic Claude', openai: 'OpenAI', 'openai-response': 'OpenAI Response' };
+    const protoColors = { anthropic: 'tag-green', openai: 'tag-blue', 'openai-response': 'tag-blue' };
+    const protocols = (g.protocols && g.protocols.length) ? g.protocols.map(p => `<span class="tag ${protoColors[p]||'tag-dim'}" style="font-size:11px">${protoNames[p]||p}</span>`).join(' ') : '<span style="color:#6b7280;font-size:12px">未设置</span>';
     const models = (g.models && g.models.length) ? g.models.map(m => `<span class="tag tag-green" style="font-size:11px">${m}</span>`).join(' ') : '<span style="color:#6b7280;font-size:12px">不限</span>';
     const gs = groupStats[g.id] || {};
     const todayCost = gs.today_cost ? '$' + gs.today_cost.toFixed(4) : '-';
     const totalCost = gs.total_cost ? '$' + gs.total_cost.toFixed(4) : '-';
+    const logModeMap = { off: '关闭', error_only: '仅错误', random: '随机', random_session: '会话亲和', all: '全开' };
+    const logModeColor = { off: '#6b7280', error_only: '#ff4444', random: '#ffaa00', random_session: '#00aaff', all: '#00ff88' };
+    const lm = g.log_mode || 'all';
+    const logModeHtml = `<span style="color:${logModeColor[lm]||'#e4e7eb'};font-size:12px">${logModeMap[lm]||lm}</span>${(lm==='random'||lm==='random_session') ? '<br><span style="font-size:11px;color:#6b7280">' + (g.log_sample_rate||10) + '%</span>' : ''}`;
     return `<tr>
     <td style="font-size:12px;color:#6b7280">${g.id.substring(0,8)}</td>
     <td>${g.name}</td>
-    <td style="max-width:300px">${models}</td>
+    <td style="max-width:200px;white-space:normal">${protocols}</td>
+    <td style="max-width:300px;white-space:normal">${models}</td>
+    <td>${logModeHtml}</td>
     <td style="font-size:13px;color:#00ff88;font-weight:500">${todayCost}</td>
     <td style="font-size:13px;color:#ffaa00;font-weight:500">${totalCost}</td>
     <td style="font-size:12px;font-family:monospace">
@@ -471,23 +556,41 @@ async function loadGroups() {
       <button class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:11px" onclick="regenKey('${g.id}')" title="重新生成">&#8635;</button>
     </td>
     <td class="actions">
-      <button class="btn btn-info btn-sm" onclick="editGroupModels('${g.id}')">模型</button>
+      <button class="btn btn-info btn-sm" onclick="editGroup('${g.id}')">编辑</button>
       <button class="btn btn-danger btn-sm" onclick="delGroup('${g.id}')">删除</button>
     </td>
   </tr>`;
   }).join('');
-  // 更新上游表单的分组下拉
+  // 更新上游表单的分组下拉（含"全部"用于过滤）
   const sel = document.getElementById('u-group');
-  const flt = document.getElementById('u-filter');
-  sel.innerHTML = groups.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
-  flt.innerHTML = '<option value="">全部</option>' + groups.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">全部</option>' + groups.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
+  if (prev) sel.value = prev;
   // 更新故障转移 tab
   renderFailover();
+}
+function showAddGroupModal() {
+  document.getElementById('add-group-mask').style.display = 'block';
+  document.getElementById('add-group-modal').style.display = 'block';
+}
+function hideAddGroupModal() {
+  document.getElementById('add-group-mask').style.display = 'none';
+  document.getElementById('add-group-modal').style.display = 'none';
+  document.getElementById('g-name').value = '';
+  document.querySelectorAll('.g-proto-cb').forEach(cb => { cb.checked = cb.value === 'anthropic'; });
+  document.getElementById('g-logmode').value = 'all';
+  document.getElementById('g-samplerate').value = '10';
+  document.getElementById('g-samplerate-row').style.display = 'none';
 }
 async function addGroup() {
   const name = document.getElementById('g-name').value.trim();
   if (!name) return;
-  try { await api('POST', '/groups', { name }); document.getElementById('g-name').value = ''; msg('分组已添加', true); loadGroups(); }
+  const protocols = [...document.querySelectorAll('.g-proto-cb:checked')].map(cb => cb.value);
+  const logMode = document.getElementById('g-logmode').value;
+  const logSampleRate = parseInt(document.getElementById('g-samplerate').value) || 10;
+  const body = { name, protocols, log_mode: logMode };
+  if (logMode === 'random' || logMode === 'random_session') body.log_sample_rate = logSampleRate;
+  try { await api('POST', '/groups', body); hideAddGroupModal(); msg('分组已添加', true); loadGroups(); }
   catch(e) { msg(e.message, false); }
 }
 async function delGroup(id) {
@@ -505,18 +608,26 @@ async function regenKey(id) {
   catch(e) { msg(e.message, false); }
 }
 let gmModels = [];
-function editGroupModels(id) {
+function editGroup(id) {
   const g = groups.find(g => g.id === id);
   if (!g) return;
   document.getElementById('gm-id').value = id;
-  document.getElementById('gm-title').textContent = g.name + ' — 支持模型';
+  document.getElementById('gm-title').textContent = '编辑分组 — ' + g.name;
+  document.getElementById('gm-name').value = g.name;
   document.getElementById('gm-input').value = '';
+  // 设置协议 checkbox
+  const protos = g.protocols || [];
+  document.querySelectorAll('.gm-proto-cb').forEach(cb => { cb.checked = protos.includes(cb.value); });
   gmModels = [...(g.models || [])];
   renderGmTags();
+  // 设置日志模式
+  document.getElementById('gm-logmode').value = g.log_mode || 'all';
+  document.getElementById('gm-samplerate').value = g.log_sample_rate || 10;
+  gmLogModeChange();
   document.getElementById('gm-mask').style.display = 'block';
   document.getElementById('gm-modal').style.display = 'block';
 }
-function closeGroupModelsModal() {
+function closeGroupEditModal() {
   document.getElementById('gm-mask').style.display = 'none';
   document.getElementById('gm-modal').style.display = 'none';
 }
@@ -541,14 +652,29 @@ function removeGroupModel(idx) {
   gmModels.splice(idx, 1);
   renderGmTags();
 }
-async function saveGroupModels() {
+function gmLogModeChange() {
+  const mode = document.getElementById('gm-logmode').value;
+  document.getElementById('gm-samplerate-row').style.display = (mode === 'random' || mode === 'random_session') ? 'flex' : 'none';
+  const desc = { off: '关闭所有请求日志记录', error_only: '仅记录错误和故障转移日志，成功请求不记录', random: '按采样率随机记录部分请求', random_session: '随机选择会话，被选中的会话记录所有请求', all: '记录所有请求日志' };
+  document.getElementById('gm-logmode-desc').textContent = desc[mode] || '';
+}
+function gLogModeChange() {
+  const mode = document.getElementById('g-logmode').value;
+  document.getElementById('g-samplerate-row').style.display = (mode === 'random' || mode === 'random_session') ? 'flex' : 'none';
+}
+async function saveGroupEdit() {
   const id = document.getElementById('gm-id').value;
   const g = groups.find(g => g.id === id);
   if (!g) return;
+  const name = document.getElementById('gm-name').value.trim();
+  if (!name) { msg('请填写分组名称', false); return; }
+  const protocols = [...document.querySelectorAll('.gm-proto-cb:checked')].map(cb => cb.value);
+  const logMode = document.getElementById('gm-logmode').value;
+  const logSampleRate = parseInt(document.getElementById('gm-samplerate').value) || 10;
   try {
-    await api('PUT', '/groups/' + id, { name: g.name, models: gmModels, failover_rules: g.failover_rules || [], health_check: g.health_check || null });
-    msg('分组模型已更新', true);
-    closeGroupModelsModal();
+    await api('PUT', '/groups/' + id, { name, protocols, models: gmModels, failover_rules: g.failover_rules || [], health_check: g.health_check || null, log_mode: logMode, log_sample_rate: logSampleRate });
+    msg('分组已更新', true);
+    closeGroupEditModal();
     loadGroups();
   } catch(e) { msg(e.message, false); }
 }
@@ -572,16 +698,19 @@ function renderFailover() {
         ${isDefault ? '<span style="font-size:12px;color:#6b7280;background:#1f2937;padding:2px 8px;border-radius:4px">使用默认规则</span>' : ''}
       </div>
       <table style="width:100%;margin-bottom:8px">
-        <thead><tr><th>状态码</th><th>动作</th><th>冷却秒数</th><th>读取 Header</th><th>操作</th></tr></thead>
+        <thead><tr><th>状态码</th><th>动作</th><th>冷却秒数</th><th>读取 Header</th><th>重试次数</th><th>操作</th></tr></thead>
         <tbody id="fo-rules-${g.id}">
           ${rules.map((r,i) => `<tr>
             <td><input type="number" value="${r.code}" data-gid="${g.id}" data-idx="${i}" data-field="code" style="width:70px;padding:4px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb;font-family:monospace" onchange="foFieldChange(this)"></td>
             <td><select data-gid="${g.id}" data-idx="${i}" data-field="action" style="padding:4px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb" onchange="foFieldChange(this)">
               <option value="offline" ${r.action==='offline'?'selected':''}>下线</option>
               <option value="cooldown" ${r.action==='cooldown'?'selected':''}>冷却</option>
+              <option value="retry" ${r.action==='retry'?'selected':''}>重试</option>
+              <option value="retry_other" ${r.action==='retry_other'?'selected':''}>换节点重试</option>
             </select></td>
             <td><input type="number" value="${r.action==='cooldown'?(r.cooldown_s||60):''}" data-gid="${g.id}" data-idx="${i}" data-field="cooldown_s" ${r.action!=='cooldown'?'disabled':''} style="width:70px;padding:4px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb;font-family:monospace" placeholder="60" onchange="foFieldChange(this)"></td>
             <td><input value="${r.use_header||''}" data-gid="${g.id}" data-idx="${i}" data-field="use_header" ${r.action!=='cooldown'?'disabled':''} style="width:120px;padding:4px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb;font-family:monospace" placeholder="retry-after" onchange="foFieldChange(this)"></td>
+            <td><input type="number" value="${(r.action==='retry'||r.action==='retry_other')?(r.retries||1):''}" data-gid="${g.id}" data-idx="${i}" data-field="retries" ${r.action!=='retry'&&r.action!=='retry_other'?'disabled':''} style="width:60px;padding:4px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb;font-family:monospace" placeholder="1" onchange="foFieldChange(this)"></td>
             <td><button class="btn btn-danger btn-sm" onclick="foDeleteRule('${g.id}',${i})">删除</button></td>
           </tr>`).join('')}
         </tbody>
@@ -621,7 +750,7 @@ function foCollectRules(gid) {
     const r = {};
     inputs.forEach(el => {
       const f = el.dataset.field;
-      if (f === 'code' || f === 'cooldown_s') r[f] = parseInt(el.value) || 0;
+      if (f === 'code' || f === 'cooldown_s' || f === 'retries') r[f] = parseInt(el.value) || 0;
       else if (f === 'action') r[f] = el.value;
       else if (f === 'use_header') r[f] = el.value.trim();
     });
@@ -637,8 +766,17 @@ function foFieldChange(el) {
     const row = el.closest('tr');
     const cs = row.querySelector('[data-field="cooldown_s"]');
     const uh = row.querySelector('[data-field="use_header"]');
-    if (el.value === 'cooldown') { cs.disabled = false; uh.disabled = false; if(!cs.value) cs.value = '60'; }
-    else { cs.disabled = true; cs.value = ''; uh.disabled = true; uh.value = ''; }
+    const rt = row.querySelector('[data-field="retries"]');
+    if (el.value === 'cooldown') {
+      cs.disabled = false; uh.disabled = false; if(!cs.value) cs.value = '60';
+      rt.disabled = true; rt.value = '';
+    } else if (el.value === 'retry' || el.value === 'retry_other') {
+      rt.disabled = false; if(!rt.value) rt.value = '1';
+      cs.disabled = true; cs.value = ''; uh.disabled = true; uh.value = '';
+    } else {
+      cs.disabled = true; cs.value = ''; uh.disabled = true; uh.value = '';
+      rt.disabled = true; rt.value = '';
+    }
   }
 }
 function foDeleteRule(gid, idx) {
@@ -675,7 +813,7 @@ async function foReset(gid, name) {
 function groupName(id) { const g = groups.find(g => g.id === id); return g ? g.name : id.substring(0,8); }
 let upstreamStats = {};
 async function loadUpstreams() {
-  const filter = document.getElementById('u-filter').value;
+  const filter = document.getElementById('u-group').value;
   const [r, sr] = await Promise.all([
     api('GET', '/upstreams' + (filter ? '?group_id=' + filter : '')),
     api('GET', '/stats')
@@ -719,6 +857,18 @@ async function loadUpstreams() {
       <td style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(u.api)}">${escHtml(u.api)}</td>
       <td>${groupName(u.group_id)}</td>
       <td style="font-size:11px;overflow:hidden">${(u.models && u.models.length) ? '<div style="display:flex;flex-direction:column;gap:2px">' + u.models.map(m => '<span class="tag tag-green" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + m + '</span>').join('') + '</div>' : '<span style="color:#6b7280">继承分组</span>'}</td>
+      <td style="font-size:12px">${(()=>{
+        const w = u.weight != null ? u.weight : 1;
+        let wHtml = w === 0 ? '<span style="color:#ff4444;font-weight:600">暂停</span>' : '<span style="font-weight:600">' + w + '</span>';
+        const src = u.source === 'registry' ? '<br><span class="tag tag-blue" style="font-size:10px;padding:1px 4px">自动注册</span>' : '<br><span class="tag tag-dim" style="font-size:10px;padding:1px 4px">手动添加</span>';
+        const lock = u.no_override ? ' <span title="禁止覆盖" style="font-size:11px">&#128274;</span>' : '';
+        let hb = '';
+        if (u.source === 'registry' && u.heartbeat_at) {
+          const ago = Math.round(Date.now()/1000 - u.heartbeat_at);
+          hb = '<br><span style="font-size:10px;color:' + (ago > 30 ? '#ff4444' : '#00ff88') + '">&#9829; ' + (ago < 60 ? ago + 's' : Math.round(ago/60) + 'm') + '</span>';
+        }
+        return wHtml + src + lock + hb;
+      })()}</td>
       <td class="${sc}">${statusLabel}${statusExtra}</td>
       <td style="font-size:12px;color:#00aaff">${ttfb}</td>
       <td style="font-size:12px;color:#00aaff">${latency}</td>
@@ -741,7 +891,7 @@ async function loadUpstreams() {
   const siteTotalCost = siteStats.total_cost || 0;
   const siteTotalReqs = siteStats.total_requests || 0;
   document.getElementById('u-foot').innerHTML = `<tr style="background:#0f1419;border-top:2px solid #00ff88;font-weight:600">
-    <td colspan="7" style="text-align:right">全站合计</td>
+    <td colspan="8" style="text-align:right">全站合计</td>
     <td style="color:#9ca3af">${siteTodayReqs}</td>
     <td style="color:#00ff88">$${siteTodayCost.toFixed(4)}</td>
     <td style="color:#ffaa00">$${siteTotalCost.toFixed(4)} (${siteTotalReqs}次)</td>
@@ -765,15 +915,34 @@ function startCooldownTimers() {
     if (!anyActive) { clearInterval(cdTimerInterval); cdTimerInterval = null; loadUpstreams(); }
   }, 1000);
 }
+function showAddForm() {
+  const gid = document.getElementById('u-group').value;
+  if (!gid) { msg('请先选择分组', false); return; }
+  document.getElementById('add-mask').style.display = 'block';
+  document.getElementById('add-modal').style.display = 'block';
+}
+function hideAddForm() {
+  document.getElementById('add-mask').style.display = 'none';
+  document.getElementById('add-modal').style.display = 'none';
+  document.getElementById('u-api').value = '';
+  document.getElementById('u-key').value = '';
+  document.getElementById('u-remark').value = '';
+  document.getElementById('u-weight').value = '1';
+  document.getElementById('u-no-override').checked = false;
+}
 async function addUpstream() {
   const gid = document.getElementById('u-group').value;
   const a = document.getElementById('u-api').value.trim();
   const k = document.getElementById('u-key').value.trim();
   const r = document.getElementById('u-remark').value.trim();
-  if (!gid || !a || !k) { msg('请填写完整', false); return; }
-  try { await api('POST', '/upstreams', { group_id: gid, api: a, api_key: k, remark: r }); msg('上游已添加', true); loadUpstreams();
-    document.getElementById('u-api').value = ''; document.getElementById('u-key').value = ''; document.getElementById('u-remark').value = '';
-  } catch(e) { msg(e.message, false); }
+  const w = parseInt(document.getElementById('u-weight').value);
+  const no = document.getElementById('u-no-override').checked;
+  if (!gid) { msg('请先选择分组', false); return; }
+  if (!a || !k) { msg('请填写完整', false); return; }
+  const body = { group_id: gid, api: a, api_key: k, remark: r, no_override: no };
+  if (!isNaN(w)) body.weight = w;
+  try { await api('POST', '/upstreams', body); msg('上游已添加', true); hideAddForm(); loadUpstreams(); }
+  catch(e) { msg(e.message, false); }
 }
 async function delUp(id) {
   if (!confirm('确认删除？')) return;
@@ -795,7 +964,25 @@ function editUp(id) {
   document.getElementById('edit-api').value = u.api;
   document.getElementById('edit-key').value = '';
   document.getElementById('edit-remark').value = u.remark || '';
-  document.getElementById('edit-models').value = (u.models || []).join(', ');
+  document.getElementById('edit-weight').value = u.weight != null ? u.weight : 1;
+  document.getElementById('edit-no-override').checked = !!u.no_override;
+  // registry 上游禁止编辑"禁止覆盖"
+  document.getElementById('edit-no-override').disabled = u.source === 'registry';
+  // 根据分组模型配置渲染模型选择区域
+  const g = groups.find(g => g.id === u.group_id);
+  const area = document.getElementById('edit-models-area');
+  if (g && g.models && g.models.length > 0) {
+    const uModels = u.models || [];
+    area.innerHTML = g.models.map(m => {
+      const checked = uModels.includes(m) ? 'checked' : '';
+      return `<label style="display:inline-flex;align-items:center;gap:4px;margin:4px 8px 4px 0;cursor:pointer;min-width:auto">
+        <input type="checkbox" class="edit-model-cb" value="${m}" ${checked}>
+        <span class="tag tag-green" style="font-size:12px">${m}</span>
+      </label>`;
+    }).join('') + '<div style="font-size:12px;color:#6b7280;margin-top:6px">未勾选任何模型则继承分组，勾选后仅接收对应模型的流量</div>';
+  } else {
+    area.innerHTML = '<span style="color:#6b7280;font-size:13px">分组未配置模型，不限制</span>';
+  }
   document.getElementById('edit-mask').style.display = 'block';
   document.getElementById('edit-modal').style.display = 'block';
 }
@@ -809,11 +996,19 @@ async function saveEditUpstream() {
   const a = document.getElementById('edit-api').value.trim();
   const k = document.getElementById('edit-key').value.trim();
   const r = document.getElementById('edit-remark').value.trim();
-  const m = document.getElementById('edit-models').value.trim();
+  const w = parseInt(document.getElementById('edit-weight').value);
   if (a) body.api = a;
   if (k) body.api_key = k;
   body.remark = r;
-  body.models = m ? m.split(',').map(s => s.trim()).filter(s => s) : [];
+  if (!isNaN(w)) body.weight = w;
+  body.no_override = document.getElementById('edit-no-override').checked;
+  // 从 checkbox 收集选中的模型
+  const cbs = document.querySelectorAll('.edit-model-cb');
+  if (cbs.length > 0) {
+    body.models = Array.from(cbs).filter(cb => cb.checked).map(cb => cb.value);
+  } else {
+    body.models = [];
+  }
   try { await api('PUT', '/upstreams/' + id, body); msg('已更新', true); closeEditModal(); loadUpstreams(); }
   catch(e) { msg(e.message, false); }
 }
@@ -1340,8 +1535,14 @@ async function saveUpstreamConcurrency(uid) {
 let reqLogs = [];
 let pricingMap = {};
 async function loadReqLogs() {
+  const groupFilter = document.getElementById('rl-group-filter').value;
+  // 更新分组下拉选项
+  const sel = document.getElementById('rl-group-filter');
+  const prevVal = sel.value;
+  sel.innerHTML = '<option value="">全部分组</option>' + groups.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
+  sel.value = prevVal;
   const [r, pr] = await Promise.all([
-    api('GET', '/request-logs'),
+    api('GET', '/request-logs' + (groupFilter ? '?group_id=' + groupFilter : '')),
     api('GET', '/pricing')
   ]);
   reqLogs = r.data || [];
@@ -1396,7 +1597,7 @@ function renderReqLogs() {
       <td style="white-space:nowrap">${outputHtml}</td>
       <td style="font-size:12px;color:#ffaa00;font-weight:500;white-space:nowrap">${costHtml}</td>
       <td style="font-size:12px">${e.duration_ms}ms</td>
-      <td style="color:${actionColor[e.action]||'#666'};font-weight:bold;font-size:13px">${actionMap[e.action]||e.action}</td>
+      <td style="color:${actionColor[e.action]||'#666'};font-weight:bold;font-size:13px">${actionMap[e.action]||e.action}${e.retry_count ? ' <span style="font-weight:normal;font-size:11px;color:#ffaa00">(重试' + e.retry_count + ')</span>' : ''}</td>
       <td style="font-size:12px;color:#9ca3af"><span style="cursor:pointer;text-decoration:underline dotted" onclick="showLogDetail(${origIdx})">${hasDetail ? shortDetail : '查看'}</span></td>
     </tr>`;
   }).join('');
@@ -1406,7 +1607,9 @@ async function showLogDetail(idx) {
   document.getElementById('log-detail-mask').style.display = 'block';
   document.getElementById('log-detail-modal').style.display = 'block';
   try {
-    const r = await api('GET', `/request-logs/${idx}`);
+    const groupFilter = document.getElementById('rl-group-filter').value;
+    const qs = groupFilter ? '?group_id=' + groupFilter : '';
+    const r = await api('GET', `/request-logs/${idx}${qs}`);
     const e = r.data;
     if (!e) { document.getElementById('log-detail-content').innerHTML = '<div style="color:#ff4444;padding:20px">未找到该日志</div>'; return; }
     const t = new Date(e.time * 1000).toLocaleString();
@@ -1421,7 +1624,7 @@ async function showLogDetail(idx) {
       <b>会话：</b><code style="font-size:12px;word-break:break-all">${escHtml(e.session_key || '-')}</code><br>
       <b>状态码：</b>${e.status || '-'}<br>
       <b>耗时：</b>${e.duration_ms}ms<br>
-      <b>结果：</b>${actionMap[e.action] || e.action}<br>
+      <b>结果：</b>${actionMap[e.action] || e.action}${e.retry_count ? ' <span style="color:#ffaa00">(重试' + e.retry_count + '次)</span>' : ''}<br>
     </div>`;
     if (e.detail && e.detail !== '-') {
       html += `<div style="margin-top:12px"><b>详情：</b></div>

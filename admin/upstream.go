@@ -65,6 +65,8 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 			Remark         string   `json:"remark"`
 			Models         []string `json:"models"`
 			MaxConcurrency int      `json:"max_concurrency"`
+			Weight         *int     `json:"weight"`
+			NoOverride     bool     `json:"no_override"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -92,6 +94,9 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 			MaxConcurrency: req.MaxConcurrency,
 			Remark:         req.Remark,
 			Status:         "active",
+			Weight:         req.Weight,
+			Source:         "manual",
+			NoOverride:     req.NoOverride,
 		}
 		if err := s.Update(func(cfg *model.Config) {
 			cfg.Upstreams = append(cfg.Upstreams, u)
@@ -110,6 +115,8 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 			Remark         *string   `json:"remark"`           // 指针区分未传和传空字符串
 			Models         *[]string `json:"models"`           // 指针区分未传和空数组
 			MaxConcurrency *int      `json:"max_concurrency"`  // 指针区分未传和传 0
+			Weight         **int     `json:"weight"`           // 二级指针：nil=未传，*nil=清除(恢复默认)，**int=设值
+			NoOverride     *bool     `json:"no_override"`      // 指针区分未传和传 false
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -133,6 +140,12 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 					}
 					if req.MaxConcurrency != nil {
 						cfg.Upstreams[i].MaxConcurrency = *req.MaxConcurrency
+					}
+					if req.Weight != nil {
+						cfg.Upstreams[i].Weight = *req.Weight
+					}
+					if req.NoOverride != nil {
+						cfg.Upstreams[i].NoOverride = *req.NoOverride
 					}
 					found = true
 					return
@@ -229,7 +242,8 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 
 	// 请求日志
 	r.GET("/request-logs", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"data": bq.RequestLogs()})
+		groupID := c.Query("group_id")
+		c.JSON(http.StatusOK, gin.H{"data": bq.RequestLogs(groupID)})
 	})
 
 	// 单条日志详情（含完整 body）
@@ -239,7 +253,8 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid index"})
 			return
 		}
-		entry := bq.RequestLogDetail(idx)
+		groupID := c.Query("group_id")
+		entry := bq.RequestLogDetail(idx, groupID)
 		if entry == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return

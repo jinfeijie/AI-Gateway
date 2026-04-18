@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +38,7 @@ type RequestLog struct {
 	Action     string `json:"action"` // success / failover / error
 	Detail     string `json:"detail,omitempty"`
 	Model      string `json:"model,omitempty"`
+	RetryCount int    `json:"retry_count,omitempty"` // 重试计数
 	// Token 用量
 	InputTokens      int `json:"input_tokens,omitempty"`
 	OutputTokens     int `json:"output_tokens,omitempty"`
@@ -65,15 +68,27 @@ type costEntry struct {
 	cost       float64
 }
 
+const maxLinesPerLogFile = 10000
+
+// groupLogState 管理单个分组的日志文件状态
+type groupLogState struct {
+	dir       string
+	file      *os.File
+	lineCount int
+	fileIdx   int
+}
+
 type Handler struct {
 	store    *store.Store
 	balancer *Balancer
 	client   *http.Client
 
-	logPath string     // JSONL 日志文件路径
-	logFile *os.File   // 日志持久化文件
-	logCh   chan RequestLog // 异步写入文件
-	costCh  chan costEntry  // 异步费用更新
+	logBaseDir string             // 日志根目录：{dataDir}/logs/
+	logWriters map[string]*groupLogState // groupID → writer state
+	logCh      chan RequestLog    // 异步写入通道
+	costCh     chan costEntry     // 异步费用更新
+
+	logSessions sync.Map // session key → bool，用于 random_session 模式记住采样决策
 
 	siteStats     SiteStats
 	siteStatsMu   sync.Mutex
@@ -102,9 +117,41 @@ func (h *Handler) addLog(entry RequestLog) {
 	}
 }
 
+// shouldLog 根据分组的日志记录模式判断该请求是否应记录日志
+func (h *Handler) shouldLog(group *model.Group, sessionKey string) bool {
+	mode := group.LogMode
+	if mode == "" || mode == "all" || mode == "error_only" {
+		return true
+	}
+	if mode == "off" {
+		return false
+	}
+	rate := group.LogSampleRate
+	if rate <= 0 {
+		rate = 10
+	}
+	if rate >= 100 {
+		return true
+	}
+	if mode == "random" {
+		return rand.Intn(100) < rate
+	}
+	// random_session: 按会话维度决策
+	if sessionKey == "" {
+		return rand.Intn(100) < rate
+	}
+	key := group.ID + ":" + sessionKey
+	if v, ok := h.logSessions.Load(key); ok {
+		return v.(bool)
+	}
+	decision := rand.Intn(100) < rate
+	h.logSessions.Store(key, decision)
+	return decision
+}
+
 // RequestLogs 返回请求日志（倒序），剥离 body 字段减少传输量
-func (h *Handler) RequestLogs() []any {
-	logs := h.readLastLogs(maxRequestLogs)
+func (h *Handler) RequestLogs(groupID string) []any {
+	logs := h.readLogs(groupID, maxRequestLogs)
 	result := make([]any, len(logs))
 	for i := range logs {
 		logs[i].RequestBody = ""
@@ -115,8 +162,8 @@ func (h *Handler) RequestLogs() []any {
 }
 
 // RequestLogDetail 返回单条日志完整内容（含 body），idx 为倒序索引（0=最新）
-func (h *Handler) RequestLogDetail(idx int) *RequestLog {
-	logs := h.readLastLogs(maxRequestLogs)
+func (h *Handler) RequestLogDetail(idx int, groupID string) *RequestLog {
+	logs := h.readLogs(groupID, maxRequestLogs)
 	rIdx := len(logs) - 1 - idx
 	if rIdx < 0 || rIdx >= len(logs) {
 		return nil
@@ -175,7 +222,7 @@ func (h *Handler) DailyStats(pricing []model.ModelPricing) any {
 	today := now.Format("2006-01-02")
 
 	// 从日志算延迟（反映近期性能）
-	logs := h.readLastLogs(maxRequestLogs)
+	logs := h.readLogs("", maxRequestLogs)
 
 	type latencyAcc struct {
 		count     int
@@ -278,22 +325,20 @@ func NewHandler(s *store.Store, dataPath string) *Handler {
 		balancer: NewBalancer(s),
 		client: &http.Client{
 			Timeout: 5 * time.Minute,
+			Transport: &http.Transport{
+				MaxIdleConnsPerHost: 256,
+				MaxConnsPerHost:     512,
+				IdleConnTimeout:     90 * time.Second,
+			},
 		},
-		logCh:  make(chan RequestLog, 1024),
-		costCh: make(chan costEntry, 256),
+		logCh:      make(chan RequestLog, 1024),
+		costCh:     make(chan costEntry, 256),
+		logWriters: make(map[string]*groupLogState),
 	}
 	h.balancer.SetSessionsPath(dataPath)
-	// 日志目录：数据文件同级的 logs/
-	logDir := filepath.Join(filepath.Dir(dataPath), "logs")
-	os.MkdirAll(logDir, 0755)
-	logPath := filepath.Join(logDir, "requests.jsonl")
-	h.logPath = logPath
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		log.Printf("[proxy] failed to open log file: %v", err)
-	} else {
-		h.logFile = f
-	}
+	// 日志根目录：数据文件同级的 logs/
+	h.logBaseDir = filepath.Join(filepath.Dir(dataPath), "logs")
+	os.MkdirAll(h.logBaseDir, 0755)
 	// 全站统计持久化
 	h.siteStatsPath = filepath.Join(filepath.Dir(dataPath), "site_stats.json")
 	h.loadSiteStats()
@@ -306,28 +351,219 @@ func NewHandler(s *store.Store, dataPath string) *Handler {
 	return h
 }
 
-// logWriter 后台 goroutine，异步写入日志文件
+// logWriter 后台 goroutine，按分组写入日志文件，每 1w 条一个文件
 func (h *Handler) logWriter() {
-	for entry := range h.logCh {
-		if h.logFile != nil {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	dirty := make(map[string]bool)
+	for {
+		select {
+		case entry, ok := <-h.logCh:
+			if !ok {
+				// channel 关闭，刷盘后退出
+				for gid := range dirty {
+					if w, exists := h.logWriters[gid]; exists {
+						w.file.Sync()
+					}
+				}
+				return
+			}
+			groupID := entry.GroupID
+			if groupID == "" {
+				groupID = "_unknown"
+			}
+			w := h.getOrCreateWriter(groupID)
+			if w == nil {
+				continue
+			}
 			data, _ := json.Marshal(entry)
-			h.logFile.Write(append(data, '\n'))
-			h.logFile.Sync()
+			w.file.Write(append(data, '\n'))
+			dirty[groupID] = true
+			w.lineCount++
+			if w.lineCount >= maxLinesPerLogFile {
+				w.file.Sync()
+				delete(dirty, groupID)
+				h.rotateWriter(groupID, w)
+			}
+		case <-ticker.C:
+			for gid := range dirty {
+				if w, exists := h.logWriters[gid]; exists {
+					w.file.Sync()
+				}
+			}
+			dirty = make(map[string]bool)
 		}
 	}
 }
 
-// costWriter 后台 goroutine，异步持久化费用统计
+// getOrCreateWriter 获取或创建分组日志写入器
+func (h *Handler) getOrCreateWriter(groupID string) *groupLogState {
+	if w, ok := h.logWriters[groupID]; ok {
+		return w
+	}
+
+	dir := filepath.Join(h.logBaseDir, groupID)
+	os.MkdirAll(dir, 0755)
+
+	// 查找已有文件确定起始状态
+	files, _ := filepath.Glob(filepath.Join(dir, "*.jsonl"))
+	sort.Strings(files)
+
+	fileIdx := 1
+	lineCount := 0
+
+	if len(files) > 0 {
+		latest := files[len(files)-1]
+		base := filepath.Base(latest)
+		name := strings.TrimSuffix(base, ".jsonl")
+		if n, err := strconv.Atoi(name); err == nil {
+			fileIdx = n
+		}
+		lineCount = countFileLines(latest)
+		if lineCount >= maxLinesPerLogFile {
+			fileIdx++
+			lineCount = 0
+		}
+	}
+
+	path := filepath.Join(dir, fmt.Sprintf("%05d.jsonl", fileIdx))
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Printf("[proxy] failed to open log file %s: %v", path, err)
+		return nil
+	}
+
+	w := &groupLogState{
+		dir:       dir,
+		file:      f,
+		lineCount: lineCount,
+		fileIdx:   fileIdx,
+	}
+	h.logWriters[groupID] = w
+	return w
+}
+
+// rotateWriter 轮转日志文件
+func (h *Handler) rotateWriter(groupID string, w *groupLogState) {
+	w.file.Close()
+	w.fileIdx++
+	w.lineCount = 0
+	path := filepath.Join(w.dir, fmt.Sprintf("%05d.jsonl", w.fileIdx))
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Printf("[proxy] failed to rotate log file %s: %v", path, err)
+		delete(h.logWriters, groupID)
+		return
+	}
+	w.file = f
+}
+
+// costWriter 后台 goroutine，异步持久化费用统计（批量刷盘）
 func (h *Handler) costWriter() {
-	for range h.costCh {
-		h.saveSiteStats()
-		h.saveUpstreamStats()
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	dirty := false
+	for {
+		select {
+		case _, ok := <-h.costCh:
+			if !ok {
+				if dirty {
+					h.saveSiteStats()
+					h.saveUpstreamStats()
+				}
+				return
+			}
+			dirty = true
+		case <-ticker.C:
+			if dirty {
+				h.saveSiteStats()
+				h.saveUpstreamStats()
+				dirty = false
+			}
+		}
 	}
 }
 
-// readLastLogs 从 JSONL 文件尾部读取最后 n 条日志
-func (h *Handler) readLastLogs(n int) []RequestLog {
-	f, err := os.Open(h.logPath)
+// countFileLines 快速统计文件行数
+func countFileLines(path string) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	count := 0
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := f.Read(buf)
+		for i := 0; i < n; i++ {
+			if buf[i] == '\n' {
+				count++
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	return count
+}
+
+// readLogs 读取最近 n 条日志，groupID 为空则读取所有分组
+func (h *Handler) readLogs(groupID string, n int) []RequestLog {
+	if groupID != "" {
+		return h.readGroupLogs(groupID, n)
+	}
+	return h.readAllGroupLogs(n)
+}
+
+// readGroupLogs 从指定分组的日志文件中读取最近 n 条（tail 方式，从最新文件倒序读取）
+func (h *Handler) readGroupLogs(groupID string, n int) []RequestLog {
+	dir := filepath.Join(h.logBaseDir, groupID)
+	files, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
+	if err != nil || len(files) == 0 {
+		return nil
+	}
+	sort.Strings(files)
+
+	var result []RequestLog
+	for i := len(files) - 1; i >= 0 && len(result) < n; i-- {
+		remaining := n - len(result)
+		entries := tailReadFile(files[i], remaining)
+		result = append(entries, result...)
+	}
+	if len(result) > n {
+		result = result[len(result)-n:]
+	}
+	return result
+}
+
+// readAllGroupLogs 从所有分组中读取最近 n 条日志并按时间合并
+func (h *Handler) readAllGroupLogs(n int) []RequestLog {
+	entries, err := os.ReadDir(h.logBaseDir)
+	if err != nil {
+		return nil
+	}
+
+	var all []RequestLog
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		groupLogs := h.readGroupLogs(e.Name(), n)
+		all = append(all, groupLogs...)
+	}
+
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].Time < all[j].Time
+	})
+	if len(all) > n {
+		all = all[len(all)-n:]
+	}
+	return all
+}
+
+// tailReadFile 从 JSONL 文件尾部读取最后 n 条记录
+func tailReadFile(path string, n int) []RequestLog {
+	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
@@ -339,7 +575,6 @@ func (h *Handler) readLastLogs(n int) []RequestLog {
 	}
 	size := info.Size()
 
-	// 向前扫描找到倒数第 n 个换行符的位置
 	readFrom := int64(0)
 	buf := make([]byte, 32*1024)
 	nlCount := 0
@@ -391,7 +626,7 @@ func (h *Handler) loadSiteStats() {
 		return
 	}
 	// 文件不存在，从日志文件回填
-	logs := h.readLastLogs(maxRequestLogs)
+	logs := h.readLogs("", maxRequestLogs)
 	pm := h.pricingMap()
 	today := time.Now().In(cst).Format("2006-01-02")
 	h.siteStatsMu.Lock()
@@ -453,7 +688,7 @@ func (h *Handler) loadUpstreamStats() {
 		return
 	}
 	// 文件不存在，从日志文件回填
-	logs := h.readLastLogs(maxRequestLogs)
+	logs := h.readLogs("", maxRequestLogs)
 	pm := h.pricingMap()
 	today := time.Now().In(cst).Format("2006-01-02")
 	h.upstreamStatsMu.Lock()
@@ -573,6 +808,22 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 	// 提取 model 名称
 	reqModel := extractModel(body)
 
+	// 分组模型校验：如果分组配置了支持模型列表，则只允许列表内的模型
+	if len(group.Models) > 0 && reqModel != "" {
+		allowed := false
+		for _, m := range group.Models {
+			if m == reqModel {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error",
+				fmt.Sprintf("model %q is not allowed in this group, allowed models: %v", reqModel, group.Models))
+			return
+		}
+	}
+
 	// 字段剔除
 	cfg = h.store.Get()
 	if len(cfg.StripFields) > 0 {
@@ -582,18 +833,24 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 	// 会话亲和 session key: 仅从 metadata.user_id 提取，无 user_id 时不做亲和
 	sessionKey, rawUserID := extractUserID(body)
 
+	// 根据分组日志模式决定是否记录本次请求
+	logEnabled := h.shouldLog(group, sessionKey)
+	logErrorOnly := group.LogMode == "error_only"
+
 	// 提取上游请求 ID（用于关联 new-api 日志）
 	requestID := c.GetHeader("X-Request-Log-Id")
 
 	maxRetries := h.balancer.ActiveCount(group.ID)
 	if maxRetries == 0 {
-		h.addLog(RequestLog{
-			Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
-			SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
-			Status: 502, Duration: time.Since(startTime).Milliseconds(),
-			Action: "error", Detail: "no active upstream",
-			RequestBody: string(body),
-		})
+		if logEnabled {
+			h.addLog(RequestLog{
+				Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
+				SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
+				Status: 502, Duration: time.Since(startTime).Milliseconds(),
+				Action: "error", Detail: "no active upstream",
+				RequestBody: string(body),
+			})
+		}
 		anthropicError(c, http.StatusBadGateway, "api_error", "no active upstream")
 		return
 	}
@@ -607,6 +864,9 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 	for _, r := range failoverRules {
 		ruleMap[r.Code] = r
 	}
+
+	// retry 动作按状态码记录已重试次数
+	retryCount := make(map[int]int)
 
 	excluded := make(map[string]bool)
 	for attempt := 0; attempt < maxRetries; attempt++ {
@@ -624,14 +884,16 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 
 		if err != nil {
 			log.Printf("[proxy] upstream %s (%s) request error: %v", upstream.ID, upstream.Remark, err)
-			h.addLog(RequestLog{
-				Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
-				SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
-				UpstreamID: upstream.ID, Remark: upstream.Remark,
-				Status: 0, Duration: time.Since(startTime).Milliseconds(),
-				Action: "failover", Detail: fmt.Sprintf("连接错误: %v", err),
-				RequestBody: string(body),
-			})
+			if logEnabled {
+				h.addLog(RequestLog{
+					Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
+					SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
+					UpstreamID: upstream.ID, Remark: upstream.Remark,
+					Status: 0, Duration: time.Since(startTime).Milliseconds(),
+					Action: "failover", Detail: fmt.Sprintf("连接错误: %v", err), RetryCount: attempt,
+					RequestBody: string(body),
+				})
+			}
 			// 客户端主动断开（context canceled）不标记上游故障
 			if c.Request.Context().Err() != nil {
 				return
@@ -650,6 +912,40 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			log.Printf("[proxy] upstream %s (%s) returned %d, action=%s, body: %s", upstream.ID, upstream.Remark, statusCode, rule.Action, errBodyStr)
 			detail := fmt.Sprintf("HTTP %d → %s", statusCode, rule.Action)
 			switch rule.Action {
+			case "retry", "retry_other":
+				maxRetry := rule.Retries
+				if maxRetry <= 0 {
+					maxRetry = 1
+				}
+				retryCount[statusCode]++
+				if retryCount[statusCode] > maxRetry {
+					// 超过重试次数，不再重试，直接返回错误给客户端
+					detail = fmt.Sprintf("HTTP %d → retry exhausted (%d/%d)", statusCode, retryCount[statusCode]-1, maxRetry)
+					if logEnabled {
+						h.addLog(RequestLog{
+							Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
+							SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
+							UpstreamID: upstream.ID, Remark: upstream.Remark,
+							Status: statusCode, Duration: time.Since(startTime).Milliseconds(),
+							Action: "error", Detail: detail, RetryCount: attempt,
+							RequestBody: string(body), ResponseBody: errBodyStr,
+						})
+					}
+					resp.Body.Close()
+					// 原样返回上游响应
+					c.Data(statusCode, "application/json", errBody)
+					return
+				}
+				actionLabel := "retry"
+				if rule.Action == "retry" {
+					// 重试：允许同一上游再次被选中
+					delete(excluded, upstream.ID)
+					actionLabel = "retry(same)"
+				} else {
+					actionLabel = "retry(other)"
+				}
+				detail = fmt.Sprintf("HTTP %d → %s %d/%d", statusCode, actionLabel, retryCount[statusCode], maxRetry)
+				log.Printf("[proxy] upstream %s %s %d/%d for HTTP %d", upstream.ID, actionLabel, retryCount[statusCode], maxRetry, statusCode)
 			case "cooldown":
 				dur := time.Duration(rule.CooldownS) * time.Second
 				if dur == 0 {
@@ -668,14 +964,16 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			default: // "offline"
 				h.markFault(upstream.ID, fmt.Sprintf("HTTP %d: %s", statusCode, errBodyStr))
 			}
-			h.addLog(RequestLog{
-				Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
-				SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
-				UpstreamID: upstream.ID, Remark: upstream.Remark,
-				Status: statusCode, Duration: time.Since(startTime).Milliseconds(),
-				Action: "failover", Detail: detail,
-				RequestBody: string(body), ResponseBody: errBodyStr,
-			})
+			if logEnabled {
+				h.addLog(RequestLog{
+					Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
+					SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
+					UpstreamID: upstream.ID, Remark: upstream.Remark,
+					Status: statusCode, Duration: time.Since(startTime).Milliseconds(),
+					Action: "failover", Detail: detail, RetryCount: attempt,
+					RequestBody: string(body), ResponseBody: errBodyStr,
+				})
+			}
 			resp.Body.Close()
 			continue
 		}
@@ -691,7 +989,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
 			UpstreamID: upstream.ID, Remark: upstream.Remark,
 			Status: statusCode, Duration: time.Since(startTime).Milliseconds(), TTFBMs: ttfb,
-			Action: "success",
+			Action: "success", RetryCount: attempt,
 			InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
 			CacheReadTokens: usage.CacheReadInputTokens, CacheWriteTokens: usage.CacheCreationInputTokens,
 			RequestBody: string(body),
@@ -702,7 +1000,9 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			logEntry.Detail = fmt.Sprintf("HTTP %d", statusCode)
 			log.Printf("[proxy] upstream %s (%s) returned %d (not in failover rules), body: %s", upstream.ID, upstream.Remark, statusCode, string(respBodyBytes))
 		}
-		h.addLog(logEntry)
+		if logEnabled && !(logErrorOnly && logEntry.Action == "success") {
+			h.addLog(logEntry)
+		}
 		if logEntry.Action == "success" {
 			cost := calcCost(logEntry, h.pricingMap())
 			h.addSiteCost(cost)
@@ -716,13 +1016,15 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		return
 	}
 
-	h.addLog(RequestLog{
-		Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
-		SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
-		Status: 502, Duration: time.Since(startTime).Milliseconds(),
-		Action: "error", Detail: "all upstreams failed",
-		RequestBody: string(body),
-	})
+	if logEnabled {
+		h.addLog(RequestLog{
+			Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
+			SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
+			Status: 502, Duration: time.Since(startTime).Milliseconds(),
+			Action: "error", Detail: "all upstreams failed",
+			RequestBody: string(body),
+		})
+	}
 	anthropicError(c, http.StatusBadGateway, "api_error", "all upstreams failed")
 }
 

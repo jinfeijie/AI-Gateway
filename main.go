@@ -7,6 +7,7 @@ import (
 	"ai-gateway/admin"
 	"ai-gateway/health"
 	"ai-gateway/proxy"
+	"ai-gateway/registry"
 	"ai-gateway/store"
 	"ai-gateway/web"
 
@@ -46,6 +47,10 @@ func main() {
 	// Admin API
 	adminGroup := r.Group("/admin")
 	admin.Register(adminGroup, s, checker, h)
+
+	// Registry API（注册中心，独立鉴权）
+	registryGroup := r.Group("/registry")
+	registry.Register(registryGroup, s)
 
 	// Web UI
 	web.RegisterRoutes(r)

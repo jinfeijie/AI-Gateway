@@ -7,20 +7,33 @@ type Upstream struct {
 	API            string   `json:"api"`
 	APIKey         string   `json:"api_key"`
 	Remark         string   `json:"remark"`
-	Models         []string `json:"models,omitempty"`         // 支持的模型，空则继承分组
+	Models         []string `json:"models,omitempty"`          // 支持的模型，空则继承分组
 	MaxConcurrency int      `json:"max_concurrency,omitempty"` // 最大并发数，0 不限制
-	Status         string   `json:"status"`                   // active / faulted / disabled
-	FaultedAt      *int64   `json:"faulted_at,omitempty"`     // 故障时间戳
-	FaultType      string   `json:"fault_type,omitempty"`     // auto / manual
-	FaultReason    string   `json:"fault_reason,omitempty"`   // 故障原因
+	Status         string   `json:"status"`                    // active / faulted / disabled
+	FaultedAt      *int64   `json:"faulted_at,omitempty"`      // 故障时间戳
+	FaultType      string   `json:"fault_type,omitempty"`      // auto / manual
+	FaultReason    string   `json:"fault_reason,omitempty"`    // 故障原因
+	Weight         *int     `json:"weight,omitempty"`          // 权重：nil=默认1，0=暂停流量，>0=加权值
+	Source         string   `json:"source,omitempty"`          // "manual"（默认）或 "registry"
+	HeartbeatAt    *int64   `json:"heartbeat_at,omitempty"`    // 最后心跳时间戳（仅 registry）
+	NoOverride     bool     `json:"no_override,omitempty"`     // 禁止注册 API 覆盖
+}
+
+// EffectiveWeight 返回实际生效的权重值，nil 视为 1
+func (u *Upstream) EffectiveWeight() int {
+	if u.Weight == nil {
+		return 1
+	}
+	return *u.Weight
 }
 
 // FailoverRule 故障转移规则
 type FailoverRule struct {
 	Code      int    `json:"code"`                  // 触发的状态码
-	Action    string `json:"action"`                // "offline" 下线 / "cooldown" 冷却
+	Action    string `json:"action"`                // "offline" 下线 / "cooldown" 冷却 / "retry" 重试
 	CooldownS int    `json:"cooldown_s,omitempty"`  // cooldown 秒数，默认 60
 	UseHeader string `json:"use_header,omitempty"`  // 从响应 header 读取冷却时长，如 "retry-after"
+	Retries   int    `json:"retries,omitempty"`     // retry 重试次数，默认 1
 }
 
 // Group 分组
@@ -28,10 +41,13 @@ type Group struct {
 	ID             string             `json:"id"`
 	Name           string             `json:"name"`
 	APIKey         string             `json:"api_key"`
-	Models         []string           `json:"models,omitempty"` // 分组支持的模型
+	Protocols      []string           `json:"protocols,omitempty"` // 支持的协议: anthropic, openai, openai-response
+	Models         []string           `json:"models,omitempty"`    // 分组支持的模型
 	MaxConcurrency int                `json:"max_concurrency,omitempty"` // 分组最大并发数，0 不限制
 	FailoverRules  []FailoverRule     `json:"failover_rules,omitempty"`
 	HealthCheck    *HealthCheckConfig `json:"health_check,omitempty"`
+	LogMode        string             `json:"log_mode,omitempty"`        // off / random / random_session / all（默认 all）
+	LogSampleRate  int                `json:"log_sample_rate,omitempty"` // 采样率百分比 1-100，默认 10
 }
 
 // HealthCheckConfig 健康检查配置
@@ -62,18 +78,20 @@ type ModelPricing struct {
 
 // Config 总配置
 type Config struct {
-	ListenAddr      string            `json:"listen_addr"`
-	AdminToken      string            `json:"admin_token"`
-	AdminUser       string            `json:"admin_user"`
-	AdminPassword   string            `json:"admin_password"`
-	Groups          []Group           `json:"groups"`
-	Upstreams       []Upstream        `json:"upstreams"`
-	HealthCheck     HealthCheckConfig `json:"health_check"`
-	ErrorMappings   []ErrorMapping    `json:"error_mappings"`
+	ListenAddr        string            `json:"listen_addr"`
+	AdminToken        string            `json:"admin_token"`
+	AdminUser         string            `json:"admin_user"`
+	AdminPassword     string            `json:"admin_password"`
+	Groups            []Group           `json:"groups"`
+	Upstreams         []Upstream        `json:"upstreams"`
+	HealthCheck       HealthCheckConfig `json:"health_check"`
+	ErrorMappings     []ErrorMapping    `json:"error_mappings"`
 	StripFields       []string          `json:"strip_fields,omitempty"`
 	ProbeModels       []string          `json:"probe_models,omitempty"`
 	DefaultProbeModel string            `json:"default_probe_model,omitempty"`
 	ModelPricing      []ModelPricing    `json:"model_pricing,omitempty"`
+	RegistryToken     string            `json:"registry_token,omitempty"` // 注册 API 鉴权 token（空=不鉴权）
+	HeartbeatTTL      int               `json:"heartbeat_ttl,omitempty"`  // 心跳超时秒数，默认 30
 }
 
 func DefaultConfig() Config {
