@@ -255,6 +255,9 @@ func (b *Balancer) pickLeastLoad(actives []model.Upstream) model.Upstream {
 		}
 	}
 	// 加权随机
+	if totalWeight <= 0 {
+		return actives[candidates[rand.Intn(len(candidates))]]
+	}
 	r := rand.Intn(totalWeight)
 	for _, ci := range candidates {
 		w := actives[ci].EffectiveWeight()
