@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -31,7 +32,12 @@ func New(path string) (*Store, error) {
 		return nil, err
 	}
 	if err := json.Unmarshal(data, &s.cfg); err != nil {
-		return nil, err
+		// 配置文件损坏，备份后用默认配置重建
+		backupPath := path + ".corrupt"
+		_ = os.WriteFile(backupPath, data, 0644)
+		log.Printf("config file corrupted, backed up to %s, reinitializing with defaults", backupPath)
+		s.cfg = model.DefaultConfig()
+		return s, s.save()
 	}
 	// 补充新增字段的默认值
 	defaults := model.DefaultConfig()
@@ -63,7 +69,12 @@ func (s *Store) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0644)
+	// 原子写入：先写临时文件再重命名，防止写入中断导致文件损坏
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.path)
 }
 
 func (s *Store) Get() model.Config {
