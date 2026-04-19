@@ -117,6 +117,10 @@ func (ch *Checker) History(upstreamID string) []HistoryEntry {
 func (ch *Checker) loop(ctx context.Context) {
 	for {
 		cfg := ch.store.Get()
+
+		// registry 心跳过期检测始终运行，不依赖健康检查开关
+		ch.checkRegistryHeartbeats()
+
 		if !cfg.HealthCheck.Enabled {
 			select {
 			case <-ctx.Done():
@@ -137,6 +141,39 @@ func (ch *Checker) loop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(interval):
+		}
+	}
+}
+
+// checkRegistryHeartbeats 检测 registry 上游心跳过期，独立于健康检查开关
+func (ch *Checker) checkRegistryHeartbeats() {
+	cfg := ch.store.Get()
+	ttl := cfg.HeartbeatTTL
+	if ttl <= 0 {
+		ttl = 30
+	}
+
+	for _, u := range cfg.Upstreams {
+		if u.Source != "registry" || u.Status == "disabled" {
+			continue
+		}
+		if u.HeartbeatAt != nil {
+			elapsed := time.Now().Unix() - *u.HeartbeatAt
+			if elapsed > int64(ttl) && u.Status != "faulted" {
+				log.Printf("[health] registry upstream %s (%s) heartbeat expired (%ds > %ds)", u.ID, u.Remark, elapsed, ttl)
+				now := time.Now().Unix()
+				ch.store.Update(func(c *model.Config) {
+					for i := range c.Upstreams {
+						if c.Upstreams[i].ID == u.ID {
+							c.Upstreams[i].Status = "faulted"
+							c.Upstreams[i].FaultedAt = &now
+							c.Upstreams[i].FaultType = "auto"
+							c.Upstreams[i].FaultReason = "heartbeat expired"
+							return
+						}
+					}
+				})
+			}
 		}
 	}
 }
@@ -169,30 +206,8 @@ func (ch *Checker) checkAll() {
 			continue
 		}
 
-		// registry 上游：心跳过期检测，不走 HTTP 探测
+		// registry 上游已在 checkRegistryHeartbeats 中处理，跳过
 		if u.Source == "registry" {
-			ttl := cfg.HeartbeatTTL
-			if ttl <= 0 {
-				ttl = 30
-			}
-			if u.HeartbeatAt != nil {
-				elapsed := time.Now().Unix() - *u.HeartbeatAt
-				if elapsed > int64(ttl) && u.Status != "faulted" {
-					log.Printf("[health] registry upstream %s (%s) heartbeat expired (%ds > %ds)", u.ID, u.Remark, elapsed, ttl)
-					now := time.Now().Unix()
-					ch.store.Update(func(c *model.Config) {
-						for i := range c.Upstreams {
-							if c.Upstreams[i].ID == u.ID {
-								c.Upstreams[i].Status = "faulted"
-								c.Upstreams[i].FaultedAt = &now
-								c.Upstreams[i].FaultType = "auto"
-								c.Upstreams[i].FaultReason = "heartbeat expired"
-								return
-							}
-						}
-					})
-				}
-			}
 			continue
 		}
 
