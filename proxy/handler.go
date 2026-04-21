@@ -3,6 +3,8 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,6 +22,9 @@ import (
 	"ai-gateway/health"
 	"ai-gateway/model"
 	"ai-gateway/store"
+
+	"github.com/andybalholm/brotli"
+	"github.com/spf13/cast"
 
 	"github.com/gin-gonic/gin"
 )
@@ -46,6 +51,7 @@ type RequestLog struct {
 	OutputTokens     int `json:"output_tokens,omitempty"`
 	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	Stream bool `json:"stream,omitempty"` // 是否流式请求
 	// 失败时记录请求体和响应体
 	RequestBody  string `json:"request_body,omitempty"`
 	ResponseBody string `json:"response_body,omitempty"`
@@ -1016,7 +1022,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 				SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
 				Status: 502, Duration: time.Since(startTime).Milliseconds(),
 				Action: "error", Detail: "no active upstream",
-				RequestBody: string(body),
+				Stream: reqStream, RequestBody: string(body),
 			})
 		}
 		anthropicError(c, http.StatusBadGateway, "api_error", "no active upstream")
@@ -1059,7 +1065,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 					UpstreamID: upstream.ID, Remark: upstream.Remark,
 					Status: 0, Duration: time.Since(startTime).Milliseconds(),
 					Action: "failover", Detail: fmt.Sprintf("连接错误: %v", err), RetryCount: attempt,
-					RequestBody: string(body),
+					Stream: reqStream, RequestBody: string(body),
 				})
 			}
 			// 客户端主动断开（context canceled）不标记上游故障
@@ -1074,8 +1080,15 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 
 		// 检查是否命中故障转移规则
 		if rule, hit := ruleMap[statusCode]; hit {
-			// 读取错误响应体用于日志
-			errBody, _ := io.ReadAll(resp.Body)
+			// 读取错误响应体用于日志（可能需要解压）
+			errReader := io.ReadCloser(resp.Body)
+			if enc := strings.ToLower(resp.Header.Get("Content-Encoding")); enc != "" {
+				if dr, err := newDecompressReader(enc, resp.Body); err == nil {
+					errReader = dr
+				}
+			}
+			errBody, _ := io.ReadAll(errReader)
+			errReader.Close()
 			errBodyStr := string(errBody)
 			log.Printf("[proxy] upstream %s (%s) returned %d, action=%s, body: %s", upstream.ID, upstream.Remark, statusCode, rule.Action, errBodyStr)
 			detail := fmt.Sprintf("HTTP %d → %s", statusCode, rule.Action)
@@ -1096,7 +1109,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 							UpstreamID: upstream.ID, Remark: upstream.Remark,
 							Status: statusCode, Duration: time.Since(startTime).Milliseconds(),
 							Action: "error", Detail: detail, RetryCount: attempt,
-							RequestBody: string(body), ResponseBody: errBodyStr,
+							Stream: reqStream, RequestBody: string(body), ResponseBody: errBodyStr,
 						})
 					}
 					resp.Body.Close()
@@ -1139,7 +1152,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 					UpstreamID: upstream.ID, Remark: upstream.Remark,
 					Status: statusCode, Duration: time.Since(startTime).Milliseconds(),
 					Action: "failover", Detail: detail, RetryCount: attempt,
-					RequestBody: string(body), ResponseBody: errBodyStr,
+					Stream: reqStream, RequestBody: string(body), ResponseBody: errBodyStr,
 				})
 			}
 			resp.Body.Close()
@@ -1154,7 +1167,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		statusCode, respBody := h.applyErrorMapping(mappings, statusCode, resp)
 
 		// 写响应并捕获 usage
-		usage, respBodyBytes := h.writeResponseWithUsage(c, statusCode, resp.Header, respBody, originalModel)
+		usage, respBodyBytes := h.writeResponseWithUsage(c, statusCode, resp.Header, respBody, originalModel, group.NoCache)
 
 		// 日志中记录用户请求的原始模型
 		logModel := reqModel
@@ -1166,11 +1179,18 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: logModel,
 			UpstreamID: upstream.ID, Remark: upstream.Remark,
 			Status: statusCode, Duration: time.Since(startTime).Milliseconds(), TTFBMs: ttfb,
-			Action: "success", RetryCount: attempt,
+			Action: "success", RetryCount: attempt, Stream: reqStream,
 			InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
 			CacheReadTokens: usage.CacheReadInputTokens, CacheWriteTokens: usage.CacheCreationInputTokens,
 			RequestBody: string(body),
 			ResponseBody: string(respBodyBytes),
+		}
+		// 无缓存模式：缓存读计入输入、缓存写计入输出，清零缓存字段
+		if group.NoCache {
+			logEntry.InputTokens += logEntry.CacheReadTokens
+			logEntry.OutputTokens += logEntry.CacheWriteTokens
+			logEntry.CacheReadTokens = 0
+			logEntry.CacheWriteTokens = 0
 		}
 		if statusCode >= 400 {
 			logEntry.Action = "error"
@@ -1201,7 +1221,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
 			Status: 502, Duration: time.Since(startTime).Milliseconds(),
 			Action: "error", Detail: "all upstreams failed",
-			RequestBody: string(body),
+			Stream: reqStream, RequestBody: string(body),
 		})
 	}
 	anthropicError(c, http.StatusBadGateway, "api_error", "all upstreams failed")
@@ -1282,11 +1302,21 @@ func httpStatusToAnthropicError(code int) string {
 	}
 }
 
-func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header http.Header, body io.ReadCloser, originalModel string) (Usage, []byte) {
+func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header http.Header, body io.ReadCloser, originalModel string, noCache bool) (Usage, []byte) {
 	defer body.Close()
 
 	// 是否需要做模型名替换
 	needModelReplace := originalModel != ""
+
+	// 检测并解压响应体，去掉 Content-Encoding 让客户端收到明文
+	contentEncoding := strings.ToLower(header.Get("Content-Encoding"))
+	decodedBody := body
+	if contentEncoding != "" {
+		if r, err := newDecompressReader(contentEncoding, body); err == nil {
+			decodedBody = r
+			header.Del("Content-Encoding")
+		}
+	}
 
 	for key, vals := range header {
 		if strings.ToLower(key) == "content-length" {
@@ -1304,7 +1334,7 @@ func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header 
 	if isSSE(header) {
 		// 流式：边写边扫描 usage
 		flusher, ok := c.Writer.(http.Flusher)
-		scanner := bufio.NewScanner(body)
+		scanner := bufio.NewScanner(decodedBody)
 		scanBuf := scanBufPool.Get().([]byte)
 		defer scanBufPool.Put(scanBuf)
 		scanner.Buffer(scanBuf, 256*1024)
@@ -1314,6 +1344,10 @@ func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header 
 			// 模型映射：替换 SSE 中的模型名
 			if needModelReplace {
 				line = replaceModelInSSELine(line, originalModel)
+			}
+			// 无缓存模式：改写 SSE 中的 usage
+			if noCache && strings.HasPrefix(line, "data: ") {
+				line = rewriteSSENoCache(line)
 			}
 			c.Writer.Write([]byte(line + "\n"))
 			if ok {
@@ -1333,10 +1367,14 @@ func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header 
 		}
 	} else {
 		// 非流式：读取全部，解析 usage，再写出
-		data, _ := io.ReadAll(body)
+		data, _ := io.ReadAll(decodedBody)
 		// 模型映射：替换响应中的模型名
 		if needModelReplace {
 			data = replaceModelInResponse(data, originalModel)
+		}
+		// 无缓存模式：改写响应中的 usage
+		if noCache {
+			data = rewriteBodyNoCache(data)
 		}
 		c.Writer.Write(data)
 		captured = data
@@ -1392,9 +1430,96 @@ func extractSSEUsage(data string, usage *Usage) {
 	}
 }
 
+// rewriteBodyNoCache 改写非流式响应的 usage：缓存读→输入，缓存写→输出，清零缓存字段
+func rewriteBodyNoCache(data []byte) []byte {
+	var obj map[string]any
+	if json.Unmarshal(data, &obj) != nil {
+		return data
+	}
+	u, ok := obj["usage"].(map[string]any)
+	if !ok {
+		return data
+	}
+	applyNoCacheUsage(u)
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return data
+	}
+	return out
+}
+
+// rewriteSSENoCache 改写 SSE data 行中的 usage
+func rewriteSSENoCache(line string) string {
+	data := line[6:] // 去掉 "data: " 前缀
+	if !strings.Contains(data, `"usage"`) {
+		return line
+	}
+	var obj map[string]any
+	if json.Unmarshal([]byte(data), &obj) != nil {
+		return line
+	}
+	modified := false
+	// 顶层 usage
+	if u, ok := obj["usage"].(map[string]any); ok {
+		applyNoCacheUsage(u)
+		modified = true
+	}
+	// message.usage (message_start 事件)
+	if msg, ok := obj["message"].(map[string]any); ok {
+		if u, ok := msg["usage"].(map[string]any); ok {
+			applyNoCacheUsage(u)
+			modified = true
+		}
+	}
+	if !modified {
+		return line
+	}
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return line
+	}
+	return "data: " + string(out)
+}
+
+// applyNoCacheUsage 将缓存 token 合并到输入/输出，清零缓存字段
+// cache_creation 嵌套对象包含 ephemeral_5m_input_tokens 和 ephemeral_1h_input_tokens
+// cache_creation_input_tokens 等于两者之和
+func applyNoCacheUsage(u map[string]any) {
+	cacheRead := cast.ToInt(u["cache_read_input_tokens"])
+	cacheWrite := cast.ToInt(u["cache_creation_input_tokens"])
+	if cacheRead == 0 && cacheWrite == 0 {
+		return
+	}
+	input := cast.ToInt(u["input_tokens"])
+	output := cast.ToInt(u["output_tokens"])
+	u["input_tokens"] = input + cacheRead
+	u["output_tokens"] = output + cacheWrite
+	u["cache_read_input_tokens"] = 0
+	u["cache_creation_input_tokens"] = 0
+	if cc, ok := u["cache_creation"].(map[string]any); ok {
+		for k := range cc {
+			cc[k] = 0
+		}
+	}
+}
+
 func isSSE(header http.Header) bool {
 	ct := header.Get("Content-Type")
 	return strings.Contains(ct, "text/event-stream")
+}
+
+// newDecompressReader 根据 Content-Encoding 返回解压 reader
+func newDecompressReader(encoding string, r io.ReadCloser) (io.ReadCloser, error) {
+	switch encoding {
+	case "gzip":
+		return gzip.NewReader(r)
+	case "br":
+		return io.NopCloser(brotli.NewReader(r)), nil
+	case "deflate":
+		return flate.NewReader(r), nil
+	default:
+		return nil, fmt.Errorf("unsupported encoding: %s", encoding)
+	}
 }
 
 // anthropicError 返回 Anthropic 规范格式的错误响应

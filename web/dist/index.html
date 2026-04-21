@@ -442,6 +442,12 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
       <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin-left:16px"><input type="checkbox" id="gm-allow-nonstream">允许非流式</label>
     </div>
   </div>
+  <div style="margin-top:12px"><label style="display:block;margin-bottom:8px">缓存计费</label>
+    <div class="form-row">
+      <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="gm-no-cache">无缓存模式</label>
+    </div>
+    <p style="font-size:12px;color:#6b7280;margin:4px 0 0">开启后缓存读计入输入 Token、缓存写计入输出 Token，缓存字段清零</p>
+  </div>
   <div class="modal-footer">
     <button class="btn" onclick="closeGroupEditModal()">取消</button>
     <button class="btn btn-primary" onclick="saveGroupEdit()">保存</button>
@@ -732,6 +738,7 @@ function editGroup(id) {
   // 设置请求模式
   document.getElementById('gm-allow-stream').checked = g.allow_stream !== false;
   document.getElementById('gm-allow-nonstream').checked = g.allow_non_stream === true;
+  document.getElementById('gm-no-cache').checked = g.no_cache === true;
   document.getElementById('gm-mask').style.display = 'block';
   document.getElementById('gm-modal').style.display = 'block';
 }
@@ -803,7 +810,7 @@ async function saveGroupEdit() {
   const logMode = document.getElementById('gm-logmode').value;
   const logSampleRate = parseInt(document.getElementById('gm-samplerate').value) || 10;
   try {
-    await api('PUT', '/groups/' + id, { name, protocols, models: gmModels, model_mapping: gmModelMapping, failover_rules: g.failover_rules || [], health_check: g.health_check || null, log_mode: logMode, log_sample_rate: logSampleRate, allow_stream: document.getElementById('gm-allow-stream').checked, allow_non_stream: document.getElementById('gm-allow-nonstream').checked });
+    await api('PUT', '/groups/' + id, { name, protocols, models: gmModels, model_mapping: gmModelMapping, failover_rules: g.failover_rules || [], health_check: g.health_check || null, log_mode: logMode, log_sample_rate: logSampleRate, allow_stream: document.getElementById('gm-allow-stream').checked, allow_non_stream: document.getElementById('gm-allow-nonstream').checked, no_cache: document.getElementById('gm-no-cache').checked });
     msg('分组已更新', true);
     closeGroupEditModal();
     loadGroups();
@@ -1799,6 +1806,7 @@ async function showLogDetail(idx) {
       <b>时间：</b>${t}<br>
       <b>分组：</b>${e.group_name || '-'}<br>
       <b>模型：</b><code>${e.model || '-'}</code><br>
+      <b>模式：</b>${e.stream ? '<span style="color:#89b4fa">流式</span>' : '<span style="color:#fab387">非流式</span>'}<br>
       <b>上游：</b>${e.remark || '-'} <span style="color:#6b7280">(${e.upstream_id || '-'})</span><br>
       <b>客户端：</b>${e.client_ip || '-'}<br>
       <b>请求ID：</b><code style="font-size:12px">${escHtml(e.request_id || '-')}</code><br>

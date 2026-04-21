@@ -27,6 +27,7 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 			LogSampleRate  *int                    `json:"log_sample_rate"`
 			AllowStream    *bool                   `json:"allow_stream"`
 			AllowNonStream *bool                   `json:"allow_non_stream"`
+			NoCache        *bool                   `json:"no_cache"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -48,6 +49,9 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 			LogMode:        req.LogMode,
 			AllowStream:    req.AllowStream,
 			AllowNonStream: req.AllowNonStream,
+		}
+		if req.NoCache != nil {
+			g.NoCache = *req.NoCache
 		}
 		if req.LogSampleRate != nil {
 			g.LogSampleRate = *req.LogSampleRate
@@ -75,6 +79,7 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 			LogSampleRate  *int                    `json:"log_sample_rate"`
 			AllowStream    *bool                   `json:"allow_stream"`
 			AllowNonStream *bool                   `json:"allow_non_stream"`
+			NoCache        *bool                   `json:"no_cache"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -114,6 +119,9 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 					}
 					if req.AllowNonStream != nil {
 						cfg.Groups[i].AllowNonStream = req.AllowNonStream
+					}
+					if req.NoCache != nil {
+						cfg.Groups[i].NoCache = *req.NoCache
 					}
 					found = true
 					return
