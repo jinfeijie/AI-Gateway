@@ -293,7 +293,7 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
     </div>
   </div>
   <table>
-    <thead><tr><th>时间</th><th>分组</th><th>模型</th><th>上游</th><th>状态码</th><th>输入</th><th>输出</th><th>费用</th><th>耗时</th><th>结果</th><th>详情</th></tr></thead>
+    <thead><tr><th>时间</th><th>分组</th><th>模型</th><th>模式</th><th>上游</th><th>状态码</th><th>输入</th><th>输出</th><th>费用</th><th>耗时</th><th>结果</th><th>详情</th></tr></thead>
     <tbody id="rl-list"></tbody>
   </table>
 </div>
@@ -1746,7 +1746,7 @@ function renderReqLogs() {
   if (search) list = list.filter(e => e.request_id && e.request_id.toLowerCase().includes(search));
   const tbody = document.getElementById('rl-list');
   if (list.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#6b7280;padding:20px">暂无记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:#6b7280;padding:20px">暂无记录</td></tr>';
     return;
   }
   tbody.innerHTML = list.map((e, idx) => {
@@ -1779,6 +1779,7 @@ function renderReqLogs() {
       <td style="font-size:12px">${t}</td>
       <td>${e.group_name || '-'}</td>
       <td style="font-size:12px;font-family:monospace">${e.model || '-'}</td>
+      <td style="font-size:12px">${e.stream ? '<span style="color:#89b4fa">流</span>' : '<span style="color:#fab387">非流</span>'}</td>
       <td>${e.remark || (e.upstream_id ? e.upstream_id.substring(0,8) : '-')}</td>
       <td>${e.status || '-'}</td>
       <td style="white-space:nowrap">${inputHtml}</td>
