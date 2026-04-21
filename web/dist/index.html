@@ -115,6 +115,7 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
   <button class="tab" data-tab="sessions" onclick="showTab('sessions')">会话亲和</button>
   <button class="tab" data-tab="ratelimit" onclick="showTab('ratelimit')">限流配置</button>
   <button class="tab" data-tab="reqlog" onclick="showTab('reqlog')">请求日志</button>
+  <button class="tab" data-tab="pricing" onclick="showTab('pricing')">模型定价</button>
 </div>
 <div id="msg"></div>
 
@@ -297,6 +298,34 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
     <tbody id="rl-list"></tbody>
   </table>
 </div>
+</div>
+
+<div id="pricing" class="panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <p style="font-size:13px;color:#9ca3af;margin:0">模型定价配置（美元/百万 Token），用于计算请求费用。</p>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-sm btn-primary" onclick="showAddPricing()">新增</button>
+      <button class="btn btn-sm" onclick="loadPricing()">刷新</button>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>模型</th><th>输入</th><th>输出</th><th>缓存读</th><th>缓存写</th><th>操作</th></tr></thead>
+    <tbody id="pricing-list"></tbody>
+  </table>
+  <div id="pricing-add" style="display:none;margin-top:16px;padding:16px;border:1px solid #1f2937;border-radius:8px">
+    <h4 style="margin:0 0 12px">新增模型定价</h4>
+    <div class="form-row"><label>模型ID</label><input id="pa-model" placeholder="claude-sonnet-4-6" style="font-family:monospace"></div>
+    <div class="form-row">
+      <label>输入</label><input id="pa-input" type="number" step="0.01" placeholder="3" style="width:100px">
+      <label style="margin-left:12px">输出</label><input id="pa-output" type="number" step="0.01" placeholder="15" style="width:100px">
+      <label style="margin-left:12px">缓存读</label><input id="pa-cache-read" type="number" step="0.01" placeholder="0.3" style="width:100px">
+      <label style="margin-left:12px">缓存写</label><input id="pa-cache-write" type="number" step="0.01" placeholder="3.75" style="width:100px">
+    </div>
+    <div style="margin-top:12px;display:flex;gap:8px">
+      <button class="btn btn-primary btn-sm" onclick="addPricing()">添加</button>
+      <button class="btn btn-sm" onclick="hideAddPricing()">取消</button>
+    </div>
+  </div>
 </div>
 
 <!-- 日志详情弹窗 -->
@@ -555,6 +584,7 @@ function showTab(id, push) {
   if (id === 'sessions') { loadSessions(); startSessionTimer(); }
   if (id === 'ratelimit') { loadRateLimit(); }
   if (id === 'reqlog') { loadReqLogs(); }
+  if (id === 'pricing') { loadPricing(); }
   // 上游 tab 自动刷新
   if (id === 'upstreams') {
     loadUpstreams();
@@ -1709,6 +1739,85 @@ async function saveUpstreamConcurrency(uid) {
     await api('PUT', '/upstreams/' + uid, { max_concurrency: val });
     msg('上游限流已更新', true);
     loadRateLimit();
+  } catch(e) { msg(e.message, false); }
+}
+
+// 模型定价管理
+let pricingList = [];
+async function loadPricing() {
+  try {
+    const r = await api('GET', '/pricing');
+    pricingList = r.data || [];
+    renderPricing();
+  } catch(e) { msg(e.message, false); }
+}
+function renderPricing() {
+  const tbody = document.getElementById('pricing-list');
+  if (pricingList.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#6b7280;padding:20px">暂无定价配置</td></tr>';
+    return;
+  }
+  tbody.innerHTML = pricingList.map((p, i) => `<tr>
+    <td style="font-family:monospace">${escHtml(p.model)}</td>
+    <td>${p.input}</td>
+    <td>${p.output}</td>
+    <td>${p.cache_read}</td>
+    <td>${p.cache_write}</td>
+    <td><button class="btn btn-sm" onclick="editPricing(${i})">编辑</button> <button class="btn btn-sm btn-danger" onclick="deletePricing(${i})">删除</button></td>
+  </tr>`).join('');
+}
+function showAddPricing() {
+  document.getElementById('pricing-add').style.display = 'block';
+  document.getElementById('pa-model').value = '';
+  document.getElementById('pa-input').value = '';
+  document.getElementById('pa-output').value = '';
+  document.getElementById('pa-cache-read').value = '';
+  document.getElementById('pa-cache-write').value = '';
+  document.getElementById('pa-model').dataset.editIdx = '';
+}
+function hideAddPricing() { document.getElementById('pricing-add').style.display = 'none'; }
+function editPricing(idx) {
+  const p = pricingList[idx];
+  document.getElementById('pricing-add').style.display = 'block';
+  document.getElementById('pa-model').value = p.model;
+  document.getElementById('pa-input').value = p.input;
+  document.getElementById('pa-output').value = p.output;
+  document.getElementById('pa-cache-read').value = p.cache_read;
+  document.getElementById('pa-cache-write').value = p.cache_write;
+  document.getElementById('pa-model').dataset.editIdx = idx;
+}
+async function addPricing() {
+  const model = document.getElementById('pa-model').value.trim();
+  if (!model) { msg('请填写模型ID', false); return; }
+  const entry = {
+    model,
+    input: parseFloat(document.getElementById('pa-input').value) || 0,
+    output: parseFloat(document.getElementById('pa-output').value) || 0,
+    cache_read: parseFloat(document.getElementById('pa-cache-read').value) || 0,
+    cache_write: parseFloat(document.getElementById('pa-cache-write').value) || 0,
+  };
+  const editIdx = document.getElementById('pa-model').dataset.editIdx;
+  const list = [...pricingList];
+  if (editIdx !== '' && editIdx !== undefined) {
+    list[parseInt(editIdx)] = entry;
+  } else {
+    if (list.some(p => p.model === model)) { msg('该模型已存在', false); return; }
+    list.push(entry);
+  }
+  try {
+    await api('PUT', '/pricing', list);
+    msg('定价已保存', true);
+    hideAddPricing();
+    loadPricing();
+  } catch(e) { msg(e.message, false); }
+}
+async function deletePricing(idx) {
+  if (!confirm('确认删除 ' + pricingList[idx].model + ' 的定价？')) return;
+  const list = pricingList.filter((_, i) => i !== idx);
+  try {
+    await api('PUT', '/pricing', list);
+    msg('已删除', true);
+    loadPricing();
   } catch(e) { msg(e.message, false); }
 }
 

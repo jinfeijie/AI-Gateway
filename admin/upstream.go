@@ -274,6 +274,22 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 		c.JSON(http.StatusOK, gin.H{"data": cfg.ModelPricing})
 	})
 
+	// 更新模型价格表（全量替换）
+	r.PUT("/pricing", func(c *gin.Context) {
+		var req []model.ModelPricing
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err := s.Update(func(cfg *model.Config) {
+			cfg.ModelPricing = req
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": req})
+	})
+
 	// 当前并发数
 	r.GET("/concurrency", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"data": bq.LoadInfo()})
