@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -25,15 +27,24 @@ func main() {
 	dataPath := flag.String("data", "data/config.json", "config data file path")
 	flag.Parse()
 
+	// 从 server.json 读取服务启动参数
+	serverCfgPath := filepath.Join(filepath.Dir(*dataPath), "server.json")
+	addr := ":8080"
+	if data, err := os.ReadFile(serverCfgPath); err == nil {
+		var sc struct {
+			ListenAddr string `json:"listen_addr"`
+		}
+		if err := json.Unmarshal(data, &sc); err != nil {
+			log.Fatalf("failed to parse %s: %v", serverCfgPath, err)
+		}
+		if sc.ListenAddr != "" {
+			addr = sc.ListenAddr
+		}
+	}
+
 	s, err := store.New(*dataPath)
 	if err != nil {
 		log.Fatalf("failed to load store: %v", err)
-	}
-
-	cfg := s.Get()
-	addr := cfg.ListenAddr
-	if addr == "" {
-		addr = ":8080"
 	}
 
 	r := gin.Default()
