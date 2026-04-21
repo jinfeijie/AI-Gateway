@@ -124,7 +124,7 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
     <button class="btn btn-primary" onclick="showAddGroupModal()">添加分组</button>
   </div>
   <table>
-    <thead><tr><th>ID</th><th>名称</th><th>协议</th><th>支持模型</th><th>日志模式</th><th>今日花费</th><th>总花费</th><th>API Key</th><th>操作</th></tr></thead>
+    <thead><tr><th>ID</th><th>名称</th><th>协议</th><th>支持模型</th><th>请求模式</th><th>日志模式</th><th>今日花费</th><th>总花费</th><th>API Key</th><th>操作</th></tr></thead>
     <tbody id="g-list"></tbody>
   </table>
 </div>
@@ -345,6 +345,12 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
       <span style="font-size:12px;color:#6b7280;margin-left:8px">1-100，默认 10%</span>
     </div>
   </div>
+  <div style="margin-top:8px"><label style="display:block;margin-bottom:8px">请求模式</label>
+    <div class="form-row">
+      <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="g-allow-stream" checked>允许流式</label>
+      <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin-left:16px"><input type="checkbox" id="g-allow-nonstream">允许非流式</label>
+    </div>
+  </div>
   <div class="modal-footer">
     <button class="btn" onclick="hideAddGroupModal()">取消</button>
     <button class="btn btn-primary" onclick="addGroup()">确认添加</button>
@@ -390,6 +396,16 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
     </div>
     <div id="gm-tags" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;min-height:30px"></div>
   </div>
+  <div style="margin-top:12px"><label style="display:block;margin-bottom:8px">模型映射</label>
+    <p style="font-size:12px;color:#6b7280;margin:0 0 8px">将用户请求的模型映射为实际转发的模型，响应中自动替换回原始模型名</p>
+    <div class="form-row">
+      <input id="gm-mm-from" placeholder="用户请求模型" style="font-family:monospace">
+      <span style="color:#6b7280;font-size:16px">→</span>
+      <input id="gm-mm-to" placeholder="实际转发模型" style="font-family:monospace">
+      <button class="btn btn-primary" onclick="addModelMapping()">添加</button>
+    </div>
+    <div id="gm-mm-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;min-height:30px"></div>
+  </div>
   <div style="margin-top:12px"><label style="display:block;margin-bottom:8px">日志记录</label>
     <div class="form-row">
       <label>记录模式</label>
@@ -407,6 +423,12 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
       <span style="font-size:12px;color:#6b7280;margin-left:8px">1-100，默认 10%</span>
     </div>
     <p id="gm-logmode-desc" style="font-size:12px;color:#6b7280;margin:4px 0 0"></p>
+  </div>
+  <div style="margin-top:12px"><label style="display:block;margin-bottom:8px">请求模式</label>
+    <div class="form-row">
+      <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="gm-allow-stream" checked>允许流式</label>
+      <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin-left:16px"><input type="checkbox" id="gm-allow-nonstream">允许非流式</label>
+    </div>
   </div>
   <div class="modal-footer">
     <button class="btn" onclick="closeGroupEditModal()">取消</button>
@@ -535,6 +557,12 @@ async function loadGroups() {
     const protoColors = { anthropic: 'tag-green', openai: 'tag-blue', 'openai-response': 'tag-blue' };
     const protocols = (g.protocols && g.protocols.length) ? g.protocols.map(p => `<span class="tag ${protoColors[p]||'tag-dim'}" style="font-size:11px">${protoNames[p]||p}</span>`).join(' ') : '<span style="color:#6b7280;font-size:12px">未设置</span>';
     const models = (g.models && g.models.length) ? g.models.map(m => `<span class="tag tag-green" style="font-size:11px">${m}</span>`).join(' ') : '<span style="color:#6b7280;font-size:12px">不限</span>';
+    const mm = g.model_mapping && Object.keys(g.model_mapping).length ? Object.entries(g.model_mapping).map(([f,t]) => `<span style="font-size:11px"><span class="tag tag-green" style="font-size:11px">${f}</span>→<span class="tag tag-blue" style="font-size:11px">${t}</span></span>`).join(' ') : '';
+    const modelsHtml = models + (mm ? '<br>' + mm : '');
+    const streamTags = [];
+    if (g.allow_stream !== false) streamTags.push('<span class="tag tag-green" style="font-size:11px">流式</span>');
+    if (g.allow_non_stream === true) streamTags.push('<span class="tag tag-blue" style="font-size:11px">非流式</span>');
+    const reqModeHtml = streamTags.length ? streamTags.join(' ') : '<span style="color:#6b7280;font-size:12px">无</span>';
     const gs = groupStats[g.id] || {};
     const todayCost = gs.today_cost ? '$' + gs.today_cost.toFixed(4) : '-';
     const totalCost = gs.total_cost ? '$' + gs.total_cost.toFixed(4) : '-';
@@ -546,7 +574,8 @@ async function loadGroups() {
     <td style="font-size:12px;color:#6b7280">${g.id.substring(0,8)}</td>
     <td>${g.name}</td>
     <td style="max-width:200px;white-space:normal">${protocols}</td>
-    <td style="max-width:300px;white-space:normal">${models}</td>
+    <td style="max-width:300px;white-space:normal">${modelsHtml}</td>
+    <td>${reqModeHtml}</td>
     <td>${logModeHtml}</td>
     <td style="font-size:13px;color:#00ff88;font-weight:500">${todayCost}</td>
     <td style="font-size:13px;color:#ffaa00;font-weight:500">${totalCost}</td>
@@ -581,6 +610,8 @@ function hideAddGroupModal() {
   document.getElementById('g-logmode').value = 'all';
   document.getElementById('g-samplerate').value = '10';
   document.getElementById('g-samplerate-row').style.display = 'none';
+  document.getElementById('g-allow-stream').checked = true;
+  document.getElementById('g-allow-nonstream').checked = false;
 }
 async function addGroup() {
   const name = document.getElementById('g-name').value.trim();
@@ -590,6 +621,8 @@ async function addGroup() {
   const logSampleRate = parseInt(document.getElementById('g-samplerate').value) || 10;
   const body = { name, protocols, log_mode: logMode };
   if (logMode === 'random' || logMode === 'random_session') body.log_sample_rate = logSampleRate;
+  body.allow_stream = document.getElementById('g-allow-stream').checked;
+  body.allow_non_stream = document.getElementById('g-allow-nonstream').checked;
   try { await api('POST', '/groups', body); hideAddGroupModal(); msg('分组已添加', true); loadGroups(); }
   catch(e) { msg(e.message, false); }
 }
@@ -608,6 +641,7 @@ async function regenKey(id) {
   catch(e) { msg(e.message, false); }
 }
 let gmModels = [];
+let gmModelMapping = {};
 function editGroup(id) {
   const g = groups.find(g => g.id === id);
   if (!g) return;
@@ -619,11 +653,16 @@ function editGroup(id) {
   const protos = g.protocols || [];
   document.querySelectorAll('.gm-proto-cb').forEach(cb => { cb.checked = protos.includes(cb.value); });
   gmModels = [...(g.models || [])];
+  gmModelMapping = Object.assign({}, g.model_mapping || {});
   renderGmTags();
+  renderModelMapping();
   // 设置日志模式
   document.getElementById('gm-logmode').value = g.log_mode || 'all';
   document.getElementById('gm-samplerate').value = g.log_sample_rate || 10;
   gmLogModeChange();
+  // 设置请求模式
+  document.getElementById('gm-allow-stream').checked = g.allow_stream !== false;
+  document.getElementById('gm-allow-nonstream').checked = g.allow_non_stream === true;
   document.getElementById('gm-mask').style.display = 'block';
   document.getElementById('gm-modal').style.display = 'block';
 }
@@ -652,6 +691,29 @@ function removeGroupModel(idx) {
   gmModels.splice(idx, 1);
   renderGmTags();
 }
+function renderModelMapping() {
+  const container = document.getElementById('gm-mm-list');
+  const entries = Object.entries(gmModelMapping);
+  if (entries.length === 0) {
+    container.innerHTML = '<span style="color:#6b7280;font-size:13px">未配置，不做模型替换</span>';
+    return;
+  }
+  container.innerHTML = entries.map(([from, to]) => `<div style="display:flex;align-items:center;gap:8px"><span class="tag tag-green">${escHtml(from)}</span><span style="color:#6b7280">→</span><span class="tag tag-blue">${escHtml(to)}</span><span class="tag-rm" onclick="removeModelMapping('${escAttr(from)}')">&times;</span></div>`).join('');
+}
+function addModelMapping() {
+  const from = document.getElementById('gm-mm-from').value.trim();
+  const to = document.getElementById('gm-mm-to').value.trim();
+  if (!from || !to) { msg('请填写完整', false); return; }
+  if (from === to) { msg('源模型和目标模型不能相同', false); return; }
+  gmModelMapping[from] = to;
+  document.getElementById('gm-mm-from').value = '';
+  document.getElementById('gm-mm-to').value = '';
+  renderModelMapping();
+}
+function removeModelMapping(from) {
+  delete gmModelMapping[from];
+  renderModelMapping();
+}
 function gmLogModeChange() {
   const mode = document.getElementById('gm-logmode').value;
   document.getElementById('gm-samplerate-row').style.display = (mode === 'random' || mode === 'random_session') ? 'flex' : 'none';
@@ -672,7 +734,7 @@ async function saveGroupEdit() {
   const logMode = document.getElementById('gm-logmode').value;
   const logSampleRate = parseInt(document.getElementById('gm-samplerate').value) || 10;
   try {
-    await api('PUT', '/groups/' + id, { name, protocols, models: gmModels, failover_rules: g.failover_rules || [], health_check: g.health_check || null, log_mode: logMode, log_sample_rate: logSampleRate });
+    await api('PUT', '/groups/' + id, { name, protocols, models: gmModels, model_mapping: gmModelMapping, failover_rules: g.failover_rules || [], health_check: g.health_check || null, log_mode: logMode, log_sample_rate: logSampleRate, allow_stream: document.getElementById('gm-allow-stream').checked, allow_non_stream: document.getElementById('gm-allow-nonstream').checked });
     msg('分组已更新', true);
     closeGroupEditModal();
     loadGroups();
@@ -1574,11 +1636,14 @@ function renderReqLogs() {
     const origIdx = reqLogs.indexOf(e);
     const fmtN = n => n ? n.toLocaleString() : '';
     let inputHtml = '-';
-    if (e.input_tokens) {
-      inputHtml = `<span style="font-size:14px;font-weight:600">${fmtN(e.input_tokens)}</span>`;
+    const baseInput = e.input_tokens || 0;
+    const cacheRead = e.cache_read_tokens || 0;
+    const cacheWrite = e.cache_write_tokens || 0;
+    if (baseInput > 0 || cacheRead > 0 || cacheWrite > 0) {
+      inputHtml = `<span style="font-size:14px;font-weight:600">${fmtN(baseInput)}</span>`;
       const cacheParts = [];
-      if (e.cache_read_tokens) cacheParts.push('缓存读 ' + fmtN(e.cache_read_tokens));
-      if (e.cache_write_tokens) cacheParts.push('写 ' + fmtN(e.cache_write_tokens));
+      if (cacheRead) cacheParts.push('缓存读 ' + fmtN(cacheRead));
+      if (cacheWrite) cacheParts.push('缓存写 ' + fmtN(cacheWrite));
       if (cacheParts.length) inputHtml += `<br><span style="font-size:11px;color:#6b7280">${cacheParts.join(' · ')}</span>`;
     }
     let outputHtml = '-';

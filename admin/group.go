@@ -17,27 +17,33 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 
 	r.POST("/groups", func(c *gin.Context) {
 		var req struct {
-			Name          string                  `json:"name" binding:"required"`
-			Protocols     []string                `json:"protocols"`
-			Models        []string                `json:"models"`
-			FailoverRules []model.FailoverRule     `json:"failover_rules"`
-			HealthCheck   *model.HealthCheckConfig `json:"health_check"`
-			LogMode       string                  `json:"log_mode"`
-			LogSampleRate *int                    `json:"log_sample_rate"`
+			Name           string                  `json:"name" binding:"required"`
+			Protocols      []string                `json:"protocols"`
+			Models         []string                `json:"models"`
+			ModelMapping   map[string]string       `json:"model_mapping"`
+			FailoverRules  []model.FailoverRule     `json:"failover_rules"`
+			HealthCheck    *model.HealthCheckConfig `json:"health_check"`
+			LogMode        string                  `json:"log_mode"`
+			LogSampleRate  *int                    `json:"log_sample_rate"`
+			AllowStream    *bool                   `json:"allow_stream"`
+			AllowNonStream *bool                   `json:"allow_non_stream"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		g := model.Group{
-			ID:            uuid.New().String(),
-			Name:          req.Name,
-			APIKey:        "sk-" + uuid.New().String(),
-			Protocols:     req.Protocols,
-			Models:        req.Models,
-			FailoverRules: req.FailoverRules,
-			HealthCheck:   req.HealthCheck,
-			LogMode:       req.LogMode,
+			ID:             uuid.New().String(),
+			Name:           req.Name,
+			APIKey:         "sk-" + uuid.New().String(),
+			Protocols:      req.Protocols,
+			Models:         req.Models,
+			ModelMapping:   req.ModelMapping,
+			FailoverRules:  req.FailoverRules,
+			HealthCheck:    req.HealthCheck,
+			LogMode:        req.LogMode,
+			AllowStream:    req.AllowStream,
+			AllowNonStream: req.AllowNonStream,
 		}
 		if req.LogSampleRate != nil {
 			g.LogSampleRate = *req.LogSampleRate
@@ -57,11 +63,14 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 			Name           string                  `json:"name" binding:"required"`
 			Protocols      []string                `json:"protocols"`
 			Models         []string                `json:"models"`
+			ModelMapping   map[string]string       `json:"model_mapping"`
 			MaxConcurrency *int                    `json:"max_concurrency"`
 			FailoverRules  []model.FailoverRule     `json:"failover_rules"`
 			HealthCheck    *model.HealthCheckConfig `json:"health_check"`
 			LogMode        *string                 `json:"log_mode"`
 			LogSampleRate  *int                    `json:"log_sample_rate"`
+			AllowStream    *bool                   `json:"allow_stream"`
+			AllowNonStream *bool                   `json:"allow_non_stream"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -78,6 +87,9 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 					if req.Models != nil {
 						cfg.Groups[i].Models = req.Models
 					}
+					if req.ModelMapping != nil {
+						cfg.Groups[i].ModelMapping = req.ModelMapping
+					}
 					if req.FailoverRules != nil {
 						cfg.Groups[i].FailoverRules = req.FailoverRules
 					}
@@ -92,6 +104,12 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 					}
 					if req.LogSampleRate != nil {
 						cfg.Groups[i].LogSampleRate = *req.LogSampleRate
+					}
+					if req.AllowStream != nil {
+						cfg.Groups[i].AllowStream = req.AllowStream
+					}
+					if req.AllowNonStream != nil {
+						cfg.Groups[i].AllowNonStream = req.AllowNonStream
 					}
 					found = true
 					return

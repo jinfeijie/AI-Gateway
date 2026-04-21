@@ -48,6 +48,9 @@ type Group struct {
 	HealthCheck    *HealthCheckConfig `json:"health_check,omitempty"`
 	LogMode        string             `json:"log_mode,omitempty"`        // off / random / random_session / all（默认 all）
 	LogSampleRate  int                `json:"log_sample_rate,omitempty"` // 采样率百分比 1-100，默认 10
+	AllowStream    *bool              `json:"allow_stream,omitempty"`    // 允许流式请求，默认 true
+	AllowNonStream *bool              `json:"allow_non_stream,omitempty"` // 允许非流式请求，默认 false
+	ModelMapping   map[string]string  `json:"model_mapping,omitempty"`   // 模型映射：用户请求模型 → 实际转发模型
 }
 
 // HealthCheckConfig 健康检查配置

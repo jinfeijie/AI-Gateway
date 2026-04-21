@@ -809,6 +809,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 	reqModel := extractModel(body)
 
 	// 分组模型校验：如果分组配置了支持模型列表，则只允许列表内的模型
+	// 模型映射的源模型也视为允许的模型
 	if len(group.Models) > 0 && reqModel != "" {
 		allowed := false
 		for _, m := range group.Models {
@@ -818,8 +819,38 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			}
 		}
 		if !allowed {
+			if _, ok := group.ModelMapping[reqModel]; ok {
+				allowed = true
+			}
+		}
+		if !allowed {
 			anthropicError(c, http.StatusBadRequest, "invalid_request_error",
 				fmt.Sprintf("model %q is not allowed in this group, allowed models: %v", reqModel, group.Models))
+			return
+		}
+	}
+
+	// 模型映射：替换请求中的模型
+	var originalModel string
+	if len(group.ModelMapping) > 0 && reqModel != "" {
+		if mapped, ok := group.ModelMapping[reqModel]; ok {
+			originalModel = reqModel
+			body = replaceModelInBody(body, mapped)
+			reqModel = mapped
+		}
+	}
+
+	// 请求模式校验
+	reqStream := extractStream(body)
+	if reqStream {
+		if group.AllowStream != nil && !*group.AllowStream {
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "streaming is not allowed in this group")
+			return
+		}
+	} else {
+		allowNonStream := group.AllowNonStream != nil && *group.AllowNonStream
+		if !allowNonStream {
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "non-streaming is not allowed in this group")
 			return
 		}
 	}
@@ -982,11 +1013,16 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		statusCode, respBody := h.applyErrorMapping(statusCode, resp)
 
 		// 写响应并捕获 usage
-		usage, respBodyBytes := h.writeResponseWithUsage(c, statusCode, resp.Header, respBody)
+		usage, respBodyBytes := h.writeResponseWithUsage(c, statusCode, resp.Header, respBody, originalModel)
 
+		// 日志中记录用户请求的原始模型
+		logModel := reqModel
+		if originalModel != "" {
+			logModel = originalModel
+		}
 		logEntry := RequestLog{
 			Time: startTime.Unix(), GroupID: group.ID, GroupName: group.Name,
-			SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
+			SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: logModel,
 			UpstreamID: upstream.ID, Remark: upstream.Remark,
 			Status: statusCode, Duration: time.Since(startTime).Milliseconds(), TTFBMs: ttfb,
 			Action: "success", RetryCount: attempt,
@@ -1004,7 +1040,9 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			h.addLog(logEntry)
 		}
 		if logEntry.Action == "success" {
-			cost := calcCost(logEntry, h.pricingMap())
+			costLog := logEntry
+			costLog.Model = reqModel // 使用实际转发的模型计算费用
+			cost := calcCost(costLog, h.pricingMap())
 			h.addSiteCost(cost)
 			h.addUpstreamCost(upstream.ID, group.ID, cost)
 			// 非阻塞发送费用到异步持久化 goroutine
@@ -1104,8 +1142,11 @@ func httpStatusToAnthropicError(code int) string {
 	}
 }
 
-func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header http.Header, body io.ReadCloser) (Usage, []byte) {
+func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header http.Header, body io.ReadCloser, originalModel string) (Usage, []byte) {
 	defer body.Close()
+
+	// 是否需要做模型名替换
+	needModelReplace := originalModel != ""
 
 	for key, vals := range header {
 		if strings.ToLower(key) == "content-length" {
@@ -1128,6 +1169,10 @@ func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header 
 		var sseBuf strings.Builder
 		for scanner.Scan() {
 			line := scanner.Text()
+			// 模型映射：替换 SSE 中的模型名
+			if needModelReplace {
+				line = replaceModelInSSELine(line, originalModel)
+			}
 			c.Writer.Write([]byte(line + "\n"))
 			if ok {
 				flusher.Flush()
@@ -1147,6 +1192,10 @@ func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header 
 	} else {
 		// 非流式：读取全部，解析 usage，再写出
 		data, _ := io.ReadAll(body)
+		// 模型映射：替换响应中的模型名
+		if needModelReplace {
+			data = replaceModelInResponse(data, originalModel)
+		}
 		c.Writer.Write(data)
 		captured = data
 		var resp struct {
@@ -1309,6 +1358,78 @@ func extractModel(body []byte) string {
 		return ""
 	}
 	return req.Model
+}
+
+// extractStream 从请求体中提取 stream 字段，默认 false
+func extractStream(body []byte) bool {
+	var req struct {
+		Stream bool `json:"stream"`
+	}
+	json.Unmarshal(body, &req)
+	return req.Stream
+}
+
+// replaceModelInBody 替换请求体中的 model 字段
+func replaceModelInBody(body []byte, newModel string) []byte {
+	var data map[string]any
+	if err := json.Unmarshal(body, &data); err != nil {
+		return body
+	}
+	data["model"] = newModel
+	out, err := json.Marshal(data)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+// replaceModelInResponse 替换非流式响应中的 model 字段
+func replaceModelInResponse(data []byte, originalModel string) []byte {
+	var resp map[string]any
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return data
+	}
+	if _, ok := resp["model"]; ok {
+		resp["model"] = originalModel
+		out, err := json.Marshal(resp)
+		if err != nil {
+			return data
+		}
+		return out
+	}
+	return data
+}
+
+// replaceModelInSSELine 替换 SSE data 行中的 model 字段
+func replaceModelInSSELine(line string, originalModel string) string {
+	if !strings.HasPrefix(line, "data: ") {
+		return line
+	}
+	data := line[6:]
+	var event map[string]any
+	if err := json.Unmarshal([]byte(data), &event); err != nil {
+		return line
+	}
+	changed := false
+	if _, ok := event["model"]; ok {
+		event["model"] = originalModel
+		changed = true
+	}
+	// message_start 事件中 message.model 也需要替换
+	if msg, ok := event["message"].(map[string]any); ok {
+		if _, ok := msg["model"]; ok {
+			msg["model"] = originalModel
+			changed = true
+		}
+	}
+	if !changed {
+		return line
+	}
+	out, err := json.Marshal(event)
+	if err != nil {
+		return line
+	}
+	return "data: " + string(out)
 }
 
 // stripFields 从 JSON body 中剔除指定字段路径
