@@ -1582,7 +1582,14 @@ async function loadSessions() {
         if (uid.account_uuid) rows.push(`<div><span style="color:#6b7280;font-size:11px">account</span> <code style="font-size:12px;user-select:all">${escHtml(uid.account_uuid)}</code> <button class="btn btn-secondary btn-sm" style="padding:0 4px;font-size:10px" onclick="copyText('${escAttr(uid.account_uuid)}')">&#128203;</button></div>`);
         if (rows.length) { idHtml = rows.join(''); } else { idHtml = `<code style="font-size:12px">${escHtml(raw)}</code>`; }
     } else {
-      idHtml = `<code style="font-size:12px;user-select:all">${escHtml(raw)}</code> <button class="btn btn-secondary btn-sm" style="padding:0 4px;font-size:10px" onclick="copyText('${escAttr(raw)}')">&#128203;</button>`;
+      // 尝试解析 user_{hash}_account__session_{uuid} 格式
+      const ccMatch = raw.match(/^user_([a-f0-9]+)_account__session_(.+)$/);
+      if (ccMatch) {
+        idHtml = `<div><span style="color:#6b7280;font-size:11px">user</span> <code style="font-size:12px;user-select:all">${escHtml(ccMatch[1].substring(0,16))}...</code> <button class="btn btn-secondary btn-sm" style="padding:0 4px;font-size:10px" onclick="copyText('${escAttr(ccMatch[1])}')">&#128203;</button></div>`
+          + `<div><span style="color:#6b7280;font-size:11px">session</span> <code style="font-size:12px;user-select:all">${escHtml(ccMatch[2])}</code> <button class="btn btn-secondary btn-sm" style="padding:0 4px;font-size:10px" onclick="copyText('${escAttr(ccMatch[2])}')">&#128203;</button></div>`;
+      } else {
+        idHtml = `<code style="font-size:12px;user-select:all">${escHtml(raw)}</code> <button class="btn btn-secondary btn-sm" style="padding:0 4px;font-size:10px" onclick="copyText('${escAttr(raw)}')">&#128203;</button>`;
+      }
     }
     return `<tr>
       <td style="max-width:400px">${idHtml}</td>
