@@ -137,7 +137,7 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
     <button class="btn btn-primary" onclick="batchProbe()" id="batch-probe-btn">批量测活</button>
   </div>
   <div style="overflow-x:auto">
-  <table style="table-layout:fixed;min-width:1345px">
+  <table style="table-layout:fixed;min-width:1425px">
     <colgroup>
       <col style="width:80px">
       <col style="width:140px">
@@ -151,9 +151,10 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
       <col style="width:70px">
       <col style="width:75px">
       <col style="width:140px">
+      <col style="width:80px">
       <col style="width:260px">
     </colgroup>
-    <thead><tr><th>备注</th><th>API</th><th>分组</th><th>模型</th><th>权重/来源</th><th>状态</th><th>首包延迟</th><th>延迟</th><th>今日请求</th><th>今日花费</th><th>总花费</th><th>故障信息</th><th>操作</th></tr></thead>
+    <thead><tr><th>ID</th><th>API</th><th>分组</th><th>模型</th><th>权重/来源</th><th>状态</th><th>首包延迟</th><th>延迟</th><th>今日请求</th><th>今日花费</th><th>总花费</th><th>故障信息</th><th>备注</th><th>操作</th></tr></thead>
     <tbody id="u-list"></tbody>
     <tfoot id="u-foot"></tfoot>
   </table>
@@ -213,7 +214,13 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
 
 <!-- 错误码映射 -->
 <div id="errors" class="panel">
-  <h4 style="margin:0 0 12px;font-size:15px">错误码映射</h4>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <h4 style="margin:0;font-size:15px">错误码映射</h4>
+    <select id="em-scope" onchange="switchErrorMappingScope()" style="padding:4px 8px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb">
+      <option value="">全局（兜底）</option>
+    </select>
+  </div>
+  <p id="em-hint" style="font-size:12px;color:#6b7280;margin:0 0 10px">分组未配置时使用全局映射兜底</p>
   <div class="form-row">
     <input type="number" id="em-src" placeholder="源状态码" style="width:100px">
     <input type="number" id="em-tgt" placeholder="目标状态码" style="width:100px">
@@ -225,6 +232,7 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
     <tbody id="em-list"></tbody>
   </table>
 
+  <div id="sf-section">
   <hr style="margin:24px 0;border:none;border-top:1px solid #1f2937">
   <h4 style="margin:0 0 8px;font-size:15px">字段剔除</h4>
   <p style="font-size:13px;color:#9ca3af;margin:0 0 12px">转发前从请求体中删除指定字段，避免上游返回 "Extra inputs are not permitted" 错误。支持通配符 <code>*</code> 匹配数组元素。</p>
@@ -233,6 +241,7 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
     <button class="btn btn-primary" onclick="addStripField()">添加</button>
   </div>
   <div id="sf-list" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+  </div>
 </div>
 
 <!-- 会话亲和 -->
@@ -276,7 +285,10 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
         <option value="success">成功</option>
         <option value="failover">故障转移</option>
         <option value="error">错误</option>
+        <option value="health_ok">健康检查成功</option>
+        <option value="health_fail">健康检查失败</option>
       </select>
+      <input id="rl-search" placeholder="搜索请求ID" oninput="renderReqLogs()" style="padding:4px 8px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb;width:180px;font-family:monospace">
       <button class="btn btn-sm" onclick="loadReqLogs()">刷新</button>
     </div>
   </div>
@@ -454,9 +466,36 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
   </div>
 </div>
 
+<div id="prompt-modal" class="modal" style="display:none;max-width:400px">
+  <h3 style="margin:0 0 12px" id="prompt-modal-title">输入</h3>
+  <div class="form-row">
+    <input type="text" id="prompt-modal-input" style="width:100%">
+  </div>
+  <div class="modal-footer">
+    <button class="btn" onclick="promptModalResolve(null)">取消</button>
+    <button class="btn btn-success" onclick="promptModalResolve(document.getElementById('prompt-modal-input').value)">确定</button>
+  </div>
+</div>
+
 <script>
 const BASE = '/admin';
 let groups = [], upstreams = [], errorMappings = [];
+
+let _promptResolve = null;
+function showPromptModal(title, defaultVal) {
+  return new Promise(resolve => {
+    _promptResolve = resolve;
+    document.getElementById('prompt-modal-title').textContent = title;
+    const inp = document.getElementById('prompt-modal-input');
+    inp.value = defaultVal || '';
+    document.getElementById('prompt-modal').style.display = 'block';
+    setTimeout(() => { inp.focus(); inp.onkeydown = e => { if (e.key === 'Enter') promptModalResolve(inp.value); if (e.key === 'Escape') promptModalResolve(null); }; }, 50);
+  });
+}
+function promptModalResolve(val) {
+  document.getElementById('prompt-modal').style.display = 'none';
+  if (_promptResolve) { _promptResolve(val); _promptResolve = null; }
+}
 
 function showLogin() {
   document.getElementById('login-page').style.display = '';
@@ -557,8 +596,9 @@ async function loadGroups() {
     const protoColors = { anthropic: 'tag-green', openai: 'tag-blue', 'openai-response': 'tag-blue' };
     const protocols = (g.protocols && g.protocols.length) ? g.protocols.map(p => `<span class="tag ${protoColors[p]||'tag-dim'}" style="font-size:11px">${protoNames[p]||p}</span>`).join(' ') : '<span style="color:#6b7280;font-size:12px">未设置</span>';
     const models = (g.models && g.models.length) ? g.models.map(m => `<span class="tag tag-green" style="font-size:11px">${m}</span>`).join(' ') : '<span style="color:#6b7280;font-size:12px">不限</span>';
-    const mm = g.model_mapping && Object.keys(g.model_mapping).length ? Object.entries(g.model_mapping).map(([f,t]) => `<span style="font-size:11px"><span class="tag tag-green" style="font-size:11px">${f}</span>→<span class="tag tag-blue" style="font-size:11px">${t}</span></span>`).join(' ') : '';
-    const modelsHtml = models + (mm ? '<br>' + mm : '');
+    const shortModel = (m) => m.replace(/^claude-/,'').replace(/^anthropic\./,'');
+    const mm = g.model_mapping && Object.keys(g.model_mapping).length ? '<div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:3px">' + Object.entries(g.model_mapping).map(([f,t]) => `<span style="display:inline-flex;align-items:center;font-size:10px;background:#2d1b69;border:1px solid #4c1d95;border-radius:3px;padding:1px 6px" title="${f} → ${t}"><span style="color:#c4b5fd">${shortModel(f)}</span><span style="color:#6b7280;margin:0 2px">→</span><span style="color:#6ee7b7">${shortModel(t)}</span></span>`).join('') + '</div>' : '';
+    const modelsHtml = models + mm;
     const streamTags = [];
     if (g.allow_stream !== false) streamTags.push('<span class="tag tag-green" style="font-size:11px">流式</span>');
     if (g.allow_non_stream === true) streamTags.push('<span class="tag tag-blue" style="font-size:11px">非流式</span>');
@@ -579,10 +619,17 @@ async function loadGroups() {
     <td>${logModeHtml}</td>
     <td style="font-size:13px;color:#00ff88;font-weight:500">${todayCost}</td>
     <td style="font-size:13px;color:#ffaa00;font-weight:500">${totalCost}</td>
-    <td style="font-size:12px;font-family:monospace">
-      <span id="gk-${g.id}" style="user-select:all">${g.api_key || '-'}</span>
-      <button class="btn btn-secondary btn-sm" style="margin-left:4px;padding:2px 6px;font-size:11px" onclick="copyKey('${g.id}')" title="复制">&#128203;</button>
-      <button class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:11px" onclick="regenKey('${g.id}')" title="重新生成">&#8635;</button>
+    <td style="font-size:12px;font-family:monospace;min-width:180px">
+      ${(g.api_keys && g.api_keys.length) ? g.api_keys.map(k => {
+        let html = '<div style="display:flex;align-items:center;gap:4px;margin-bottom:2px">';
+        html += '<span style="cursor:help;white-space:nowrap" title="' + k.key + '">' + k.key.substring(0,6) + '...' + k.key.slice(-6) + '</span>';
+        html += '<span style="color:#6b7280;font-size:10px;cursor:pointer" onclick="editKeyRemark(\'' + g.id + '\',\'' + k.id + '\',\'' + (k.remark||'').replace(/'/g,'&#39;') + '\')" title="点击修改备注">(' + (k.remark || '无备注') + ' ✎)</span>';
+        html += '<button class="btn btn-secondary btn-sm" style="padding:1px 4px;font-size:10px" onclick="copyText(\'' + k.key + '\')" title="复制">📋</button>';
+        if (g.api_keys.length > 1) html += '<button class="btn btn-danger btn-sm" style="padding:1px 4px;font-size:10px" onclick="delKey(\'' + g.id + '\',\'' + k.id + '\')" title="删除">✕</button>';
+        html += '</div>';
+        return html;
+      }).join('') : '-'}
+      <button class="btn btn-secondary btn-sm" style="padding:1px 6px;font-size:10px;margin-top:2px" onclick="addKey('${g.id}')">+ Key</button>
     </td>
     <td class="actions">
       <button class="btn btn-info btn-sm" onclick="editGroup('${g.id}')">编辑</button>
@@ -638,6 +685,28 @@ function copyKey(id) {
 async function regenKey(id) {
   if (!confirm('重新生成 API Key？旧 Key 将立即失效。')) return;
   try { const r = await api('POST', '/groups/' + id + '/regen-key'); msg('Key 已更新', true); loadGroups(); }
+  catch(e) { msg(e.message, false); }
+}
+async function regenSingleKey(groupId, keyId) {
+  if (!confirm('重新生成此 Key？旧 Key 将立即失效。')) return;
+  try { await api('POST', '/groups/' + groupId + '/keys/' + keyId + '/regen'); msg('Key 已更新', true); loadGroups(); }
+  catch(e) { msg(e.message, false); }
+}
+async function delKey(groupId, keyId) {
+  if (!confirm('删除此 Key？删除后立即失效。')) return;
+  try { await api('DELETE', '/groups/' + groupId + '/keys/' + keyId); msg('Key 已删除', true); loadGroups(); }
+  catch(e) { msg(e.message, false); }
+}
+async function addKey(groupId) {
+  const remark = await showPromptModal('Key 备注（可选）', '');
+  if (remark === null) return;
+  try { const r = await api('POST', '/groups/' + groupId + '/keys', { remark: remark }); msg('Key 已添加: ' + r.data.key.substring(0,10) + '...', true); loadGroups(); }
+  catch(e) { msg(e.message, false); }
+}
+async function editKeyRemark(groupId, keyId, current) {
+  const remark = await showPromptModal('修改备注', current);
+  if (remark === null) return;
+  try { await api('PUT', '/groups/' + groupId + '/keys/' + keyId, { remark: remark }); msg('备注已更新', true); loadGroups(); }
   catch(e) { msg(e.message, false); }
 }
 let gmModels = [];
@@ -915,7 +984,7 @@ async function loadUpstreams() {
     const todayCost = st.today_cost ? '$' + st.today_cost.toFixed(4) : '-';
     const totalCost = st.total_cost ? '$' + st.total_cost.toFixed(4) : '-';
     return `<tr>
-      <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(u.remark || '')}">${u.remark || '-'}</td>
+      <td style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer" title="点击复制: ${escAttr(u.id)}" onclick="navigator.clipboard.writeText('${u.id}');msg('已复制ID',true)">${u.id.substring(0,8)}</td>
       <td style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(u.api)}">${escHtml(u.api)}</td>
       <td>${groupName(u.group_id)}</td>
       <td style="font-size:11px;overflow:hidden">${(u.models && u.models.length) ? '<div style="display:flex;flex-direction:column;gap:2px">' + u.models.map(m => '<span class="tag tag-green" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + m + '</span>').join('') + '</div>' : '<span style="color:#6b7280">继承分组</span>'}</td>
@@ -938,6 +1007,7 @@ async function loadUpstreams() {
       <td style="font-size:12px;color:#00ff88;font-weight:500">${todayCost}</td>
       <td style="font-size:12px;color:#ffaa00;font-weight:500">${totalCost}</td>
       <td style="font-size:12px;white-space:normal;word-break:break-all;overflow:hidden">${fault}</td>
+      <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(u.remark || '')}">${u.remark || '-'}</td>
       <td class="actions">
         <button class="btn btn-primary btn-sm" onclick="editUp('${u.id}')">编辑</button>
         <button class="btn btn-info btn-sm" onclick="probeUp('${u.id}')">测活</button>
@@ -953,7 +1023,7 @@ async function loadUpstreams() {
   const siteTotalCost = siteStats.total_cost || 0;
   const siteTotalReqs = siteStats.total_requests || 0;
   document.getElementById('u-foot').innerHTML = `<tr style="background:#0f1419;border-top:2px solid #00ff88;font-weight:600">
-    <td colspan="8" style="text-align:right">全站合计</td>
+    <td colspan="9" style="text-align:right">全站合计</td>
     <td style="color:#9ca3af">${siteTodayReqs}</td>
     <td style="color:#00ff88">$${siteTodayCost.toFixed(4)}</td>
     <td style="color:#ffaa00">$${siteTotalCost.toFixed(4)} (${siteTotalReqs}次)</td>
@@ -1363,9 +1433,34 @@ async function saveProbeModels() {
 }
 
 // Error Mappings
+let emScope = ''; // '' = global, group id = group-level
 async function loadErrorMappings() {
-  const r = await api('GET', '/error-mappings');
+  // 填充分组选择器（独立拉取，不依赖 groups 变量的加载时序）
+  const sel = document.getElementById('em-scope');
+  const oldVal = sel.value;
+  const gr = await api('GET', '/groups');
+  const emGroups = gr.data || [];
+  sel.innerHTML = '<option value="">全局（兜底）</option>' + emGroups.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
+  sel.value = oldVal || '';
+  emScope = sel.value;
+  await loadErrorMappingData();
+}
+async function switchErrorMappingScope() {
+  emScope = document.getElementById('em-scope').value;
+  await loadErrorMappingData();
+}
+async function loadErrorMappingData() {
+  const url = emScope ? '/groups/' + emScope + '/error-mappings' : '/error-mappings';
+  const r = await api('GET', url);
   errorMappings = r.data || [];
+  const hint = document.getElementById('em-hint');
+  if (emScope) {
+    hint.textContent = errorMappings.length ? '当前分组有 ' + errorMappings.length + ' 条映射规则' : '未配置，将使用全局映射兜底';
+  } else {
+    hint.textContent = '分组未配置时使用全局映射兜底';
+  }
+  document.getElementById('sf-section').style.display = '';
+  await loadStripFieldData();
   renderErrorMappings();
 }
 function renderErrorMappings() {
@@ -1383,27 +1478,35 @@ async function addErrorMapping() {
   const m = document.getElementById('em-msg').value.trim();
   if (!src || !tgt) { msg('请填写状态码', false); return; }
   errorMappings.push({ source_code: src, target_code: tgt, message: m });
-  try { await api('PUT', '/error-mappings', errorMappings); msg('已保存', true); renderErrorMappings();
+  const url = emScope ? '/groups/' + emScope + '/error-mappings' : '/error-mappings';
+  try { await api('PUT', url, errorMappings); msg('已保存', true); renderErrorMappings();
     document.getElementById('em-src').value = ''; document.getElementById('em-tgt').value = ''; document.getElementById('em-msg').value = '';
+    loadErrorMappingData();
   } catch(e) { msg(e.message, false); }
 }
 async function delErrorMapping(idx) {
   errorMappings.splice(idx, 1);
-  try { await api('PUT', '/error-mappings', errorMappings); msg('已删除', true); renderErrorMappings(); }
+  const url = emScope ? '/groups/' + emScope + '/error-mappings' : '/error-mappings';
+  try { await api('PUT', url, errorMappings); msg('已删除', true); renderErrorMappings(); loadErrorMappingData(); }
   catch(e) { msg(e.message, false); }
 }
 
 // Strip Fields
 let stripFields = [];
 async function loadStripFields() {
-  const r = await api('GET', '/strip-fields');
+  await loadStripFieldData();
+}
+async function loadStripFieldData() {
+  const url = emScope ? '/groups/' + emScope + '/strip-fields' : '/strip-fields';
+  const r = await api('GET', url);
   stripFields = r.data || [];
   renderStripFields();
 }
 function renderStripFields() {
   const container = document.getElementById('sf-list');
   if (stripFields.length === 0) {
-    container.innerHTML = '<span style="color:#6b7280;font-size:13px">未配置，所有字段原样转发</span>';
+    const hint = emScope ? '未配置，将使用全局字段剔除兜底' : '未配置，所有字段原样转发';
+    container.innerHTML = '<span style="color:#6b7280;font-size:13px">' + hint + '</span>';
     return;
   }
   container.innerHTML = stripFields.map((f, i) => `<span class="tag tag-green">${f}<span class="tag-rm" onclick="delStripField(${i})">&times;</span></span>`).join('');
@@ -1414,12 +1517,14 @@ async function addStripField() {
   if (!val) return;
   if (stripFields.includes(val)) { msg('已存在', false); return; }
   stripFields.push(val);
-  try { await api('PUT', '/strip-fields', stripFields); input.value = ''; msg('已添加', true); renderStripFields(); }
+  const url = emScope ? '/groups/' + emScope + '/strip-fields' : '/strip-fields';
+  try { await api('PUT', url, stripFields); input.value = ''; msg('已添加', true); renderStripFields(); }
   catch(e) { stripFields.pop(); msg(e.message, false); }
 }
 async function delStripField(idx) {
   const removed = stripFields.splice(idx, 1);
-  try { await api('PUT', '/strip-fields', stripFields); msg('已删除', true); renderStripFields(); }
+  const url = emScope ? '/groups/' + emScope + '/strip-fields' : '/strip-fields';
+  try { await api('PUT', url, stripFields); msg('已删除', true); renderStripFields(); }
   catch(e) { stripFields.splice(idx, 0, ...removed); msg(e.message, false); }
 }
 
@@ -1601,12 +1706,14 @@ async function loadReqLogs() {
   // 更新分组下拉选项
   const sel = document.getElementById('rl-group-filter');
   const prevVal = sel.value;
-  sel.innerHTML = '<option value="">全部分组</option>' + groups.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
-  sel.value = prevVal;
-  const [r, pr] = await Promise.all([
+  const [r, pr, gr] = await Promise.all([
     api('GET', '/request-logs' + (groupFilter ? '?group_id=' + groupFilter : '')),
-    api('GET', '/pricing')
+    api('GET', '/pricing'),
+    api('GET', '/groups')
   ]);
+  const grpList = gr.data || [];
+  sel.innerHTML = '<option value="">全部分组</option>' + grpList.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
+  sel.value = prevVal;
   reqLogs = r.data || [];
   pricingMap = {};
   for (const p of (pr.data || [])) { pricingMap[p.model] = p; }
@@ -1619,8 +1726,10 @@ function calcLogCost(e) {
 }
 function renderReqLogs() {
   const filter = document.getElementById('rl-filter').value;
+  const search = (document.getElementById('rl-search').value || '').trim().toLowerCase();
   let list = reqLogs;
   if (filter) list = list.filter(e => e.action === filter);
+  if (search) list = list.filter(e => e.request_id && e.request_id.toLowerCase().includes(search));
   const tbody = document.getElementById('rl-list');
   if (list.length === 0) {
     tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#6b7280;padding:20px">暂无记录</td></tr>';

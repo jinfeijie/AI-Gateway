@@ -24,6 +24,8 @@ type Checker struct {
 
 	// 冷却设置接口
 	cooldownSetter CooldownSetter
+	// 日志写入接口
+	logWriter LogWriter
 
 	// 探测历史（环形缓冲）
 	history   []HistoryEntry
@@ -33,6 +35,25 @@ type Checker struct {
 // CooldownSetter 设置上游冷却（避免循环导入）
 type CooldownSetter interface {
 	SetCooldown(upstreamID string, d time.Duration)
+}
+
+// HealthLogEntry 健康检查日志条目
+type HealthLogEntry struct {
+	Time       int64
+	GroupID    string
+	GroupName  string
+	UpstreamID string
+	Remark     string
+	Status     int
+	DurationMs int64
+	Action     string // health_ok / health_fail
+	Detail     string
+	Model      string
+}
+
+// LogWriter 写请求日志（避免循环导入）
+type LogWriter interface {
+	AddHealthLog(entry HealthLogEntry)
 }
 
 // ProbeResult 探活结果
@@ -71,6 +92,11 @@ func (ch *Checker) SetCooldownSetter(cs CooldownSetter) {
 	ch.cooldownSetter = cs
 }
 
+// SetLogWriter 注入日志写入器（在 main.go 中创建 Handler 后调用）
+func (ch *Checker) SetLogWriter(lw LogWriter) {
+	ch.logWriter = lw
+}
+
 func (ch *Checker) Start() {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
@@ -79,7 +105,7 @@ func (ch *Checker) Start() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ch.cancel = cancel
-	go ch.loop(ctx)
+	model.SafeGo("health.loop", func() { ch.loop(ctx) })
 }
 
 func (ch *Checker) Stop() {
@@ -145,6 +171,15 @@ func (ch *Checker) loop(ctx context.Context) {
 	}
 }
 
+// statusChange 批量状态变更
+type statusChange struct {
+	upstreamID  string
+	status      string
+	faultedAt   *int64
+	faultType   string
+	faultReason string
+}
+
 // checkRegistryHeartbeats 检测 registry 上游心跳过期，独立于健康检查开关
 func (ch *Checker) checkRegistryHeartbeats() {
 	cfg := ch.store.Get()
@@ -153,6 +188,7 @@ func (ch *Checker) checkRegistryHeartbeats() {
 		ttl = 30
 	}
 
+	var changes []statusChange
 	for _, u := range cfg.Upstreams {
 		if u.Source != "registry" || u.Status == "disabled" {
 			continue
@@ -162,19 +198,19 @@ func (ch *Checker) checkRegistryHeartbeats() {
 			if elapsed > int64(ttl) && u.Status != "faulted" {
 				log.Printf("[health] registry upstream %s (%s) heartbeat expired (%ds > %ds)", u.ID, u.Remark, elapsed, ttl)
 				now := time.Now().Unix()
-				ch.store.Update(func(c *model.Config) {
-					for i := range c.Upstreams {
-						if c.Upstreams[i].ID == u.ID {
-							c.Upstreams[i].Status = "faulted"
-							c.Upstreams[i].FaultedAt = &now
-							c.Upstreams[i].FaultType = "auto"
-							c.Upstreams[i].FaultReason = "heartbeat expired"
-							return
-						}
-					}
+				changes = append(changes, statusChange{
+					upstreamID:  u.ID,
+					status:      "faulted",
+					faultedAt:   &now,
+					faultType:   "auto",
+					faultReason: "heartbeat expired",
 				})
 			}
 		}
+	}
+
+	if len(changes) > 0 {
+		ch.applyChanges(changes)
 	}
 }
 
@@ -186,7 +222,10 @@ func (ch *Checker) checkAll() {
 	groupHC := make(map[string]model.HealthCheckConfig)
 	// 构建 groupID -> failover rules 映射
 	groupRules := make(map[string]map[int]model.FailoverRule)
+	// 构建 groupID -> name 映射
+	groupName := make(map[string]string)
 	for _, g := range cfg.Groups {
+		groupName[g.ID] = g.Name
 		if g.HealthCheck != nil {
 			groupHC[g.ID] = *g.HealthCheck
 		}
@@ -200,6 +239,8 @@ func (ch *Checker) checkAll() {
 		}
 		groupRules[g.ID] = rm
 	}
+
+	var changes []statusChange
 
 	for _, u := range cfg.Upstreams {
 		if u.Status == "disabled" {
@@ -228,7 +269,31 @@ func (ch *Checker) checkAll() {
 		}
 		ch.client.Timeout = timeout
 
+		probeStart := time.Now()
 		result := ch.Probe(u.API, u.APIKey, cfg.DefaultProbeModel, hc)
+		durationMs := time.Since(probeStart).Milliseconds()
+
+		// 写请求日志
+		if ch.logWriter != nil {
+			action := "health_ok"
+			detail := ""
+			if !result.Healthy {
+				action = "health_fail"
+				detail = result.Error
+			}
+			ch.logWriter.AddHealthLog(HealthLogEntry{
+				Time:       time.Now().Unix(),
+				GroupID:    u.GroupID,
+				GroupName:  groupName[u.GroupID],
+				UpstreamID: u.ID,
+				Remark:     u.Remark,
+				Status:     result.StatusCode,
+				DurationMs: durationMs,
+				Action:     action,
+				Detail:     detail,
+				Model:      cfg.DefaultProbeModel,
+			})
+		}
 
 		// 记录历史
 		entry := HistoryEntry{
@@ -271,61 +336,69 @@ func (ch *Checker) checkAll() {
 		}
 
 		if result.Healthy && u.Status == "faulted" {
-			// faulted → half_open（第一步恢复）
 			log.Printf("[health] upstream %s (%s) probe OK, entering half_open", u.ID, u.Remark)
-			ch.store.Update(func(c *model.Config) {
-				for i := range c.Upstreams {
-					if c.Upstreams[i].ID == u.ID {
-						c.Upstreams[i].Status = "half_open"
-						return
-					}
-				}
+			changes = append(changes, statusChange{
+				upstreamID: u.ID,
+				status:     "half_open",
 			})
 		} else if result.Healthy && u.Status == "half_open" {
-			// half_open → active（完全恢复）
 			log.Printf("[health] upstream %s (%s) recovered", u.ID, u.Remark)
-			ch.store.Update(func(c *model.Config) {
-				for i := range c.Upstreams {
-					if c.Upstreams[i].ID == u.ID {
-						c.Upstreams[i].Status = "active"
-						c.Upstreams[i].FaultedAt = nil
-						c.Upstreams[i].FaultType = ""
-						c.Upstreams[i].FaultReason = ""
-						return
-					}
-				}
+			changes = append(changes, statusChange{
+				upstreamID: u.ID,
+				status:     "active",
 			})
 		} else if !result.Healthy && u.Status == "half_open" {
-			// half_open 探测失败 → 回到 faulted
 			log.Printf("[health] upstream %s (%s) half_open probe failed, back to faulted", u.ID, u.Remark)
 			now := time.Now().Unix()
-			ch.store.Update(func(c *model.Config) {
-				for i := range c.Upstreams {
-					if c.Upstreams[i].ID == u.ID {
-						c.Upstreams[i].Status = "faulted"
-						c.Upstreams[i].FaultedAt = &now
-						c.Upstreams[i].FaultType = "auto"
-						c.Upstreams[i].FaultReason = "半开探测失败: " + result.Error
-						return
-					}
-				}
+			changes = append(changes, statusChange{
+				upstreamID:  u.ID,
+				status:      "faulted",
+				faultedAt:   &now,
+				faultType:   "auto",
+				faultReason: "半开探测失败: " + result.Error,
 			})
 		} else if !result.Healthy && u.Status == "active" {
 			log.Printf("[health] upstream %s (%s) marked faulted: %d %s", u.ID, u.Remark, result.StatusCode, result.Error)
 			now := time.Now().Unix()
-			ch.store.Update(func(c *model.Config) {
-				for i := range c.Upstreams {
-					if c.Upstreams[i].ID == u.ID {
-						c.Upstreams[i].Status = "faulted"
-						c.Upstreams[i].FaultedAt = &now
-						c.Upstreams[i].FaultType = "auto"
-						c.Upstreams[i].FaultReason = result.Error
-						return
-					}
-				}
+			changes = append(changes, statusChange{
+				upstreamID:  u.ID,
+				status:      "faulted",
+				faultedAt:   &now,
+				faultType:   "auto",
+				faultReason: result.Error,
 			})
 		}
 	}
+
+	if len(changes) > 0 {
+		ch.applyChanges(changes)
+	}
+}
+
+// applyChanges 批量应用状态变更，仅一次 store.Update + 磁盘写入
+func (ch *Checker) applyChanges(changes []statusChange) {
+	changeMap := make(map[string]statusChange, len(changes))
+	for _, sc := range changes {
+		changeMap[sc.upstreamID] = sc
+	}
+	ch.store.Update(func(c *model.Config) {
+		for i := range c.Upstreams {
+			sc, ok := changeMap[c.Upstreams[i].ID]
+			if !ok {
+				continue
+			}
+			c.Upstreams[i].Status = sc.status
+			if sc.status == "active" {
+				c.Upstreams[i].FaultedAt = nil
+				c.Upstreams[i].FaultType = ""
+				c.Upstreams[i].FaultReason = ""
+			} else if sc.faultedAt != nil {
+				c.Upstreams[i].FaultedAt = sc.faultedAt
+				c.Upstreams[i].FaultType = sc.faultType
+				c.Upstreams[i].FaultReason = sc.faultReason
+			}
+		}
+	})
 }
 
 // Probe 发送真实请求探活，返回详细结果。probeModel 为空则使用默认模型。

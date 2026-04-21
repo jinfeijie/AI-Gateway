@@ -1,11 +1,18 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"ai-gateway/admin"
 	"ai-gateway/health"
+	"ai-gateway/model"
 	"ai-gateway/proxy"
 	"ai-gateway/registry"
 	"ai-gateway/store"
@@ -39,10 +46,10 @@ func main() {
 	h := proxy.NewHandler(s, *dataPath)
 	h.RegisterRoutes(r)
 
-	// 注入冷却设置器后再启动健康检查
+	// 注入冷却设置器和日志写入器后再启动健康检查
 	checker.SetCooldownSetter(h.Balancer())
+	checker.SetLogWriter(h)
 	checker.Start()
-	defer checker.Stop()
 
 	// Admin API
 	adminGroup := r.Group("/admin")
@@ -55,9 +62,31 @@ func main() {
 	// Web UI
 	web.RegisterRoutes(r)
 
-	log.Printf("AI Gateway listening on %s", addr)
-	log.Printf("Admin UI: http://localhost%s/ui", addr)
-	if err := r.Run(addr); err != nil {
-		log.Fatalf("server error: %v", err)
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: r,
 	}
+
+	// 优雅退出
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	model.SafeGo("http.server", func() {
+		log.Printf("AI Gateway listening on %s", addr)
+		log.Printf("Admin UI: http://localhost%s/ui", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("server error: %v", err)
+		}
+	})
+
+	<-quit
+	log.Println("shutting down...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv.Shutdown(ctx)
+
+	checker.Stop()
+	h.Close()
+	log.Println("server stopped")
 }

@@ -36,16 +36,26 @@ type FailoverRule struct {
 	Retries   int    `json:"retries,omitempty"`     // retry 重试次数，默认 1
 }
 
+// GroupAPIKey 分组 API Key（支持多个）
+type GroupAPIKey struct {
+	ID     string `json:"id"`
+	Key    string `json:"key"`
+	Remark string `json:"remark,omitempty"`
+}
+
 // Group 分组
 type Group struct {
 	ID             string             `json:"id"`
 	Name           string             `json:"name"`
-	APIKey         string             `json:"api_key"`
+	APIKey         string             `json:"api_key,omitempty"`  // 已废弃，迁移用
+	APIKeys        []GroupAPIKey      `json:"api_keys,omitempty"` // 多 Key 支持
 	Protocols      []string           `json:"protocols,omitempty"` // 支持的协议: anthropic, openai, openai-response
 	Models         []string           `json:"models,omitempty"`    // 分组支持的模型
 	MaxConcurrency int                `json:"max_concurrency,omitempty"` // 分组最大并发数，0 不限制
 	FailoverRules  []FailoverRule     `json:"failover_rules,omitempty"`
 	HealthCheck    *HealthCheckConfig `json:"health_check,omitempty"`
+	ErrorMappings  []ErrorMapping     `json:"error_mappings,omitempty"` // 分组级错误码映射，优先于全局
+	StripFields    []string           `json:"strip_fields,omitempty"`   // 分组级字段剔除，优先于全局
 	LogMode        string             `json:"log_mode,omitempty"`        // off / random / random_session / all（默认 all）
 	LogSampleRate  int                `json:"log_sample_rate,omitempty"` // 采样率百分比 1-100，默认 10
 	AllowStream    *bool              `json:"allow_stream,omitempty"`    // 允许流式请求，默认 true

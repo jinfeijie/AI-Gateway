@@ -13,9 +13,10 @@ import (
 )
 
 type Store struct {
-	mu   sync.RWMutex
-	path string
-	cfg  model.Config
+	mu       sync.RWMutex
+	path     string
+	cfg      model.Config
+	keyIndex map[string]int // API Key → Groups 数组下标
 }
 
 func New(path string) (*Store, error) {
@@ -50,18 +51,56 @@ func New(path string) (*Store, error) {
 	if len(s.cfg.ModelPricing) == 0 {
 		s.cfg.ModelPricing = defaults.ModelPricing
 	}
-	// 为已有分组补齐 API Key
+	// 迁移旧 api_key 到 api_keys 数组
 	dirty := false
 	for i := range s.cfg.Groups {
-		if s.cfg.Groups[i].APIKey == "" {
-			s.cfg.Groups[i].APIKey = "sk-" + uuid.New().String()
+		if s.cfg.Groups[i].APIKey != "" {
+			// 旧的单 key 迁移到新的多 key 数组
+			s.cfg.Groups[i].APIKeys = append(s.cfg.Groups[i].APIKeys, model.GroupAPIKey{
+				ID:     uuid.New().String(),
+				Key:    s.cfg.Groups[i].APIKey,
+				Remark: "默认",
+			})
+			s.cfg.Groups[i].APIKey = ""
+			dirty = true
+		}
+		if len(s.cfg.Groups[i].APIKeys) == 0 {
+			// 没有任何 key，自动生成一个
+			s.cfg.Groups[i].APIKeys = []model.GroupAPIKey{{
+				ID:     uuid.New().String(),
+				Key:    "sk-" + uuid.New().String(),
+				Remark: "默认",
+			}}
 			dirty = true
 		}
 	}
 	if dirty {
 		s.save()
 	}
+	s.rebuildIndex()
 	return s, nil
+}
+
+// rebuildIndex 重建 API Key → Group 索引
+func (s *Store) rebuildIndex() {
+	idx := make(map[string]int, len(s.cfg.Groups)*2)
+	for i, g := range s.cfg.Groups {
+		for _, ak := range g.APIKeys {
+			idx[ak.Key] = i
+		}
+	}
+	s.keyIndex = idx
+}
+
+// FindGroupByKey 通过 API Key 查找分组，返回配置快照和匹配的分组（O(1) 查找）
+func (s *Store) FindGroupByKey(key string) (model.Config, *model.Group) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if i, ok := s.keyIndex[key]; ok && i < len(s.cfg.Groups) {
+		cfg := s.cfg
+		return cfg, &cfg.Groups[i]
+	}
+	return s.cfg, nil
 }
 
 func (s *Store) save() error {
@@ -87,5 +126,6 @@ func (s *Store) Update(fn func(*model.Config)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fn(&s.cfg)
+	s.rebuildIndex()
 	return s.save()
 }

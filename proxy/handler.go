@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"ai-gateway/health"
 	"ai-gateway/model"
 	"ai-gateway/store"
 
@@ -62,6 +64,10 @@ const maxRequestLogs = 500
 // cst 东八区时区，用于日统计的日期边界
 var cst = time.FixedZone("CST", 8*3600)
 
+var scanBufPool = sync.Pool{
+	New: func() any { return make([]byte, 256*1024) },
+}
+
 // costEntry 异步费用更新
 type costEntry struct {
 	upstreamID string
@@ -78,6 +84,11 @@ type groupLogState struct {
 	fileIdx   int
 }
 
+type logSessionEntry struct {
+	decision bool
+	at       time.Time
+}
+
 type Handler struct {
 	store    *store.Store
 	balancer *Balancer
@@ -88,7 +99,12 @@ type Handler struct {
 	logCh      chan RequestLog    // 异步写入通道
 	costCh     chan costEntry     // 异步费用更新
 
-	logSessions sync.Map // session key → bool，用于 random_session 模式记住采样决策
+	// 最近日志环形缓冲（供 API 查询，不读磁盘）
+	recentLogs   []RequestLog
+	recentLogsMu sync.RWMutex
+
+	logSessions   map[string]logSessionEntry // session key → 采样决策
+	logSessionsMu sync.RWMutex
 
 	siteStats     SiteStats
 	siteStatsMu   sync.Mutex
@@ -97,6 +113,9 @@ type Handler struct {
 	upstreamStats     map[string]*UpstreamAccum // 上游独立累计
 	upstreamStatsMu   sync.Mutex
 	upstreamStatsPath string
+	latencyStatsPath  string
+
+	wg sync.WaitGroup // 等待 logWriter/costWriter 退出
 }
 
 // UpstreamAccum 单个上游的持久化累计数据
@@ -107,6 +126,18 @@ type UpstreamAccum struct {
 	TotalCost     float64 `json:"total_cost"`
 	TotalRequests int     `json:"total_requests"`
 	GroupID       string  `json:"group_id,omitempty"`
+
+	// 延迟统计（不持久化到 upstream_stats.json，单独文件）
+	LatencyCount int   `json:"-"`
+	LatencySum   int64 `json:"-"`
+	TTFBSum      int64 `json:"-"`
+}
+
+// upstreamLatency 延迟持久化结构
+type upstreamLatency struct {
+	Count int   `json:"count"`
+	Sum   int64 `json:"sum"`
+	TTFB  int64 `json:"ttfb"`
 }
 
 func (h *Handler) addLog(entry RequestLog) {
@@ -115,6 +146,22 @@ func (h *Handler) addLog(entry RequestLog) {
 	case h.logCh <- entry:
 	default:
 	}
+}
+
+// AddHealthLog 将健康检查结果写入请求日志（实现 health.LogWriter 接口）
+func (h *Handler) AddHealthLog(entry health.HealthLogEntry) {
+	h.addLog(RequestLog{
+		Time:       entry.Time,
+		GroupID:    entry.GroupID,
+		GroupName:  entry.GroupName,
+		UpstreamID: entry.UpstreamID,
+		Remark:     entry.Remark,
+		Status:     entry.Status,
+		Duration:   entry.DurationMs,
+		Action:     entry.Action,
+		Detail:     entry.Detail,
+		Model:      entry.Model,
+	})
 }
 
 // shouldLog 根据分组的日志记录模式判断该请求是否应记录日志
@@ -141,34 +188,57 @@ func (h *Handler) shouldLog(group *model.Group, sessionKey string) bool {
 		return rand.Intn(100) < rate
 	}
 	key := group.ID + ":" + sessionKey
-	if v, ok := h.logSessions.Load(key); ok {
-		return v.(bool)
+	h.logSessionsMu.RLock()
+	if entry, ok := h.logSessions[key]; ok {
+		h.logSessionsMu.RUnlock()
+		return entry.decision
 	}
+	h.logSessionsMu.RUnlock()
 	decision := rand.Intn(100) < rate
-	h.logSessions.Store(key, decision)
+	h.logSessionsMu.Lock()
+	h.logSessions[key] = logSessionEntry{decision: decision, at: time.Now()}
+	h.logSessionsMu.Unlock()
 	return decision
 }
 
 // RequestLogs 返回请求日志（倒序），剥离 body 字段减少传输量
 func (h *Handler) RequestLogs(groupID string) []any {
-	logs := h.readLogs(groupID, maxRequestLogs)
-	result := make([]any, len(logs))
-	for i := range logs {
-		logs[i].RequestBody = ""
-		logs[i].ResponseBody = ""
-		result[len(logs)-1-i] = logs[i]
+	h.recentLogsMu.RLock()
+	src := h.recentLogs
+	h.recentLogsMu.RUnlock()
+
+	result := make([]any, 0, len(src))
+	for i := len(src) - 1; i >= 0; i-- {
+		if groupID != "" && src[i].GroupID != groupID {
+			continue
+		}
+		entry := src[i]
+		entry.RequestBody = ""
+		entry.ResponseBody = ""
+		result = append(result, entry)
 	}
 	return result
 }
 
 // RequestLogDetail 返回单条日志完整内容（含 body），idx 为倒序索引（0=最新）
 func (h *Handler) RequestLogDetail(idx int, groupID string) *RequestLog {
-	logs := h.readLogs(groupID, maxRequestLogs)
-	rIdx := len(logs) - 1 - idx
-	if rIdx < 0 || rIdx >= len(logs) {
-		return nil
+	h.recentLogsMu.RLock()
+	src := h.recentLogs
+	h.recentLogsMu.RUnlock()
+
+	// 按条件倒序遍历，找到第 idx 条
+	count := 0
+	for i := len(src) - 1; i >= 0; i-- {
+		if groupID != "" && src[i].GroupID != groupID {
+			continue
+		}
+		if count == idx {
+			entry := src[i]
+			return &entry
+		}
+		count++
 	}
-	return &logs[rIdx]
+	return nil
 }
 
 // UpstreamStats 单个上游的统计数据
@@ -216,33 +286,10 @@ func calcCost(log RequestLog, pricingMap map[string]model.ModelPricing) float64 
 		float64(log.CacheWriteTokens)*p.CacheWrite) / 1_000_000
 }
 
-// DailyStats 统计数据：花费/请求数从持久化文件读，延迟从近期日志算
+// DailyStats 统计数据：全部从内存读取，无磁盘 I/O
 func (h *Handler) DailyStats(pricing []model.ModelPricing) any {
 	now := time.Now().In(cst)
 	today := now.Format("2006-01-02")
-
-	// 从日志算延迟（反映近期性能）
-	logs := h.readLogs("", maxRequestLogs)
-
-	type latencyAcc struct {
-		count     int
-		totalMs   int64
-		totalTTFB int64
-	}
-	latMap := make(map[string]*latencyAcc)
-	for _, l := range logs {
-		if l.Action != "success" || l.UpstreamID == "" {
-			continue
-		}
-		la, ok := latMap[l.UpstreamID]
-		if !ok {
-			la = &latencyAcc{}
-			latMap[l.UpstreamID] = la
-		}
-		la.count++
-		la.totalMs += l.Duration
-		la.totalTTFB += l.TTFBMs
-	}
 
 	// 从持久化文件读花费/请求数
 	h.upstreamStatsMu.Lock()
@@ -257,13 +304,12 @@ func (h *Handler) DailyStats(pricing []model.ModelPricing) any {
 		Groups:    make(map[string]GroupStats),
 	}
 
-	// 合并：所有有持久化记录的上游都出现
 	for id, acc := range upSnap {
 		avg := int64(0)
 		avgTTFB := int64(0)
-		if la, ok := latMap[id]; ok && la.count > 0 {
-			avg = la.totalMs / int64(la.count)
-			avgTTFB = la.totalTTFB / int64(la.count)
+		if acc.LatencyCount > 0 {
+			avg = acc.LatencySum / int64(acc.LatencyCount)
+			avgTTFB = acc.TTFBSum / int64(acc.LatencyCount)
 		}
 		todayCost := acc.TodayCost
 		todayReqs := acc.TodayRequests
@@ -331,9 +377,10 @@ func NewHandler(s *store.Store, dataPath string) *Handler {
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},
-		logCh:      make(chan RequestLog, 1024),
-		costCh:     make(chan costEntry, 256),
-		logWriters: make(map[string]*groupLogState),
+		logCh:       make(chan RequestLog, 1024),
+		costCh:      make(chan costEntry, 256),
+		logWriters:  make(map[string]*groupLogState),
+		logSessions: make(map[string]logSessionEntry),
 	}
 	h.balancer.SetSessionsPath(dataPath)
 	// 日志根目录：数据文件同级的 logs/
@@ -345,14 +392,29 @@ func NewHandler(s *store.Store, dataPath string) *Handler {
 	// 上游统计持久化
 	h.upstreamStatsPath = filepath.Join(filepath.Dir(dataPath), "upstream_stats.json")
 	h.loadUpstreamStats()
+	// 延迟统计持久化
+	h.latencyStatsPath = filepath.Join(filepath.Dir(dataPath), "latency_stats.json")
+	h.loadLatencyStats()
+	// 预热日志环形缓冲
+	h.recentLogs = h.readLogs("", maxRequestLogs)
 	// 启动异步写入 goroutine
-	go h.logWriter()
-	go h.costWriter()
+	h.wg.Add(2)
+	model.SafeGo("logWriter", h.logWriter)
+	model.SafeGo("costWriter", h.costWriter)
 	return h
+}
+
+// Close 关闭异步通道，等待 logWriter/costWriter 刷盘后退出
+func (h *Handler) Close() {
+	close(h.logCh)
+	close(h.costCh)
+	h.wg.Wait()
+	h.balancer.Close()
 }
 
 // logWriter 后台 goroutine，按分组写入日志文件，每 1w 条一个文件
 func (h *Handler) logWriter() {
+	defer h.wg.Done()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	dirty := make(map[string]bool)
@@ -379,6 +441,13 @@ func (h *Handler) logWriter() {
 			data, _ := json.Marshal(entry)
 			w.file.Write(append(data, '\n'))
 			dirty[groupID] = true
+			// 追加到内存环形缓冲
+			h.recentLogsMu.Lock()
+			h.recentLogs = append(h.recentLogs, entry)
+			if len(h.recentLogs) > maxRequestLogs {
+				h.recentLogs = h.recentLogs[len(h.recentLogs)-maxRequestLogs:]
+			}
+			h.recentLogsMu.Unlock()
 			w.lineCount++
 			if w.lineCount >= maxLinesPerLogFile {
 				w.file.Sync()
@@ -392,6 +461,15 @@ func (h *Handler) logWriter() {
 				}
 			}
 			dirty = make(map[string]bool)
+			// 清理过期的 logSessions（TTL 10 分钟）
+			h.logSessionsMu.Lock()
+			cutoff := time.Now().Add(-10 * time.Minute)
+			for k, v := range h.logSessions {
+				if v.at.Before(cutoff) {
+					delete(h.logSessions, k)
+				}
+			}
+			h.logSessionsMu.Unlock()
 		}
 	}
 }
@@ -460,6 +538,7 @@ func (h *Handler) rotateWriter(groupID string, w *groupLogState) {
 
 // costWriter 后台 goroutine，异步持久化费用统计（批量刷盘）
 func (h *Handler) costWriter() {
+	defer h.wg.Done()
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	dirty := false
@@ -470,6 +549,7 @@ func (h *Handler) costWriter() {
 				if dirty {
 					h.saveSiteStats()
 					h.saveUpstreamStats()
+					h.saveLatencyStats()
 				}
 				return
 			}
@@ -478,6 +558,7 @@ func (h *Handler) costWriter() {
 			if dirty {
 				h.saveSiteStats()
 				h.saveUpstreamStats()
+				h.saveLatencyStats()
 				dirty = false
 			}
 		}
@@ -669,13 +750,17 @@ func (h *Handler) addSiteCost(cost float64) {
 	h.siteStats.TotalRequests++
 }
 
-func (h *Handler) pricingMap() map[string]model.ModelPricing {
-	cfg := h.store.Get()
+func (h *Handler) pricingMapFrom(cfg model.Config) map[string]model.ModelPricing {
 	m := make(map[string]model.ModelPricing, len(cfg.ModelPricing))
 	for _, p := range cfg.ModelPricing {
 		m[p.Model] = p
 	}
 	return m
+}
+
+// pricingMap 供非热路径调用（如启动时加载统计）
+func (h *Handler) pricingMap() map[string]model.ModelPricing {
+	return h.pricingMapFrom(h.store.Get())
 }
 
 func (h *Handler) loadUpstreamStats() {
@@ -720,7 +805,43 @@ func (h *Handler) saveUpstreamStats() {
 	os.WriteFile(h.upstreamStatsPath, data, 0644)
 }
 
-func (h *Handler) addUpstreamCost(upstreamID string, groupID string, cost float64) {
+func (h *Handler) loadLatencyStats() {
+	data, err := os.ReadFile(h.latencyStatsPath)
+	if err != nil {
+		return
+	}
+	var m map[string]upstreamLatency
+	if json.Unmarshal(data, &m) != nil {
+		return
+	}
+	h.upstreamStatsMu.Lock()
+	defer h.upstreamStatsMu.Unlock()
+	for id, lat := range m {
+		acc := h.upstreamStats[id]
+		if acc == nil {
+			acc = &UpstreamAccum{}
+			h.upstreamStats[id] = acc
+		}
+		acc.LatencyCount = lat.Count
+		acc.LatencySum = lat.Sum
+		acc.TTFBSum = lat.TTFB
+	}
+}
+
+func (h *Handler) saveLatencyStats() {
+	h.upstreamStatsMu.Lock()
+	m := make(map[string]upstreamLatency, len(h.upstreamStats))
+	for id, acc := range h.upstreamStats {
+		if acc.LatencyCount > 0 {
+			m[id] = upstreamLatency{Count: acc.LatencyCount, Sum: acc.LatencySum, TTFB: acc.TTFBSum}
+		}
+	}
+	h.upstreamStatsMu.Unlock()
+	data, _ := json.Marshal(m)
+	os.WriteFile(h.latencyStatsPath, data, 0644)
+}
+
+func (h *Handler) addUpstreamCost(upstreamID string, groupID string, cost float64, durationMs int64, ttfbMs int64) {
 	h.upstreamStatsMu.Lock()
 	defer h.upstreamStatsMu.Unlock()
 	acc := h.upstreamStats[upstreamID]
@@ -739,6 +860,9 @@ func (h *Handler) addUpstreamCost(upstreamID string, groupID string, cost float6
 	acc.TodayRequests++
 	acc.TotalCost += cost
 	acc.TotalRequests++
+	acc.LatencyCount++
+	acc.LatencySum += durationMs
+	acc.TTFBSum += ttfbMs
 }
 
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
@@ -786,14 +910,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		return
 	}
 
-	cfg := h.store.Get()
-	var group *model.Group
-	for _, g := range cfg.Groups {
-		if g.APIKey == apiKey {
-			group = &g
-			break
-		}
-	}
+	cfg, group := h.store.FindGroupByKey(apiKey)
 	if group == nil {
 		anthropicError(c, http.StatusUnauthorized, "authentication_error", "invalid api key")
 		return
@@ -805,8 +922,15 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		return
 	}
 
+	// 单次解析请求体，后续所有提取操作从 parsed 读取
+	var parsed map[string]any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "invalid JSON body")
+		return
+	}
+
 	// 提取 model 名称
-	reqModel := extractModel(body)
+	reqModel, _ := parsed["model"].(string)
 
 	// 分组模型校验：如果分组配置了支持模型列表，则只允许列表内的模型
 	// 模型映射的源模型也视为允许的模型
@@ -835,13 +959,13 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 	if len(group.ModelMapping) > 0 && reqModel != "" {
 		if mapped, ok := group.ModelMapping[reqModel]; ok {
 			originalModel = reqModel
-			body = replaceModelInBody(body, mapped)
+			parsed["model"] = mapped
 			reqModel = mapped
 		}
 	}
 
 	// 请求模式校验
-	reqStream := extractStream(body)
+	reqStream, _ := parsed["stream"].(bool)
 	if reqStream {
 		if group.AllowStream != nil && !*group.AllowStream {
 			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "streaming is not allowed in this group")
@@ -855,14 +979,27 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		}
 	}
 
-	// 字段剔除
-	cfg = h.store.Get()
-	if len(cfg.StripFields) > 0 {
-		body = stripFields(body, cfg.StripFields)
+	// 字段剔除（分组优先，全局兜底）
+	stripFieldsCfg := group.StripFields
+	if len(stripFieldsCfg) == 0 {
+		stripFieldsCfg = cfg.StripFields
+	}
+	if len(stripFieldsCfg) > 0 {
+		for _, path := range stripFieldsCfg {
+			parts := strings.Split(path, ".")
+			stripPath(parsed, parts)
+		}
+	}
+
+	// 单次序列化：模型替换和字段剔除后重新生成 body
+	body, err = json.Marshal(parsed)
+	if err != nil {
+		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "failed to marshal request body")
+		return
 	}
 
 	// 会话亲和 session key: 仅从 metadata.user_id 提取，无 user_id 时不做亲和
-	sessionKey, rawUserID := extractUserID(body)
+	sessionKey, rawUserID := extractUserIDFromMap(parsed)
 
 	// 根据分组日志模式决定是否记录本次请求
 	logEnabled := h.shouldLog(group, sessionKey)
@@ -871,7 +1008,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 	// 提取上游请求 ID（用于关联 new-api 日志）
 	requestID := c.GetHeader("X-Request-Log-Id")
 
-	maxRetries := h.balancer.ActiveCount(group.ID)
+	maxRetries := h.balancer.ActiveCount(cfg, group.ID)
 	if maxRetries == 0 {
 		if logEnabled {
 			h.addLog(RequestLog{
@@ -901,7 +1038,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 
 	excluded := make(map[string]bool)
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		upstream := h.balancer.Pick(group.ID, sessionKey, rawUserID, reqModel, excluded)
+		upstream := h.balancer.Pick(cfg, group.ID, sessionKey, rawUserID, reqModel, excluded)
 		if upstream == nil {
 			break
 		}
@@ -1009,8 +1146,12 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			continue
 		}
 
-		// 错误码映射
-		statusCode, respBody := h.applyErrorMapping(statusCode, resp)
+		// 错误码映射：分组级优先，全局兜底
+		mappings := group.ErrorMappings
+		if len(mappings) == 0 {
+			mappings = cfg.ErrorMappings
+		}
+		statusCode, respBody := h.applyErrorMapping(mappings, statusCode, resp)
 
 		// 写响应并捕获 usage
 		usage, respBodyBytes := h.writeResponseWithUsage(c, statusCode, resp.Header, respBody, originalModel)
@@ -1042,9 +1183,9 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		if logEntry.Action == "success" {
 			costLog := logEntry
 			costLog.Model = reqModel // 使用实际转发的模型计算费用
-			cost := calcCost(costLog, h.pricingMap())
+			cost := calcCost(costLog, h.pricingMapFrom(cfg))
 			h.addSiteCost(cost)
-			h.addUpstreamCost(upstream.ID, group.ID, cost)
+			h.addUpstreamCost(upstream.ID, group.ID, cost, logEntry.Duration, logEntry.TTFBMs)
 			// 非阻塞发送费用到异步持久化 goroutine
 			select {
 			case h.costCh <- costEntry{upstreamID: upstream.ID, cost: cost}:
@@ -1072,7 +1213,7 @@ func (h *Handler) doRequest(c *gin.Context, upstream *model.Upstream, body []byt
 	if strings.HasSuffix(base, "/v1/messages") {
 		url = base
 	}
-	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, url, strings.NewReader(string(body)))
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -1096,9 +1237,8 @@ func (h *Handler) doRequest(c *gin.Context, upstream *model.Upstream, body []byt
 	return h.client.Do(req)
 }
 
-func (h *Handler) applyErrorMapping(statusCode int, resp *http.Response) (int, io.ReadCloser) {
-	cfg := h.store.Get()
-	for _, m := range cfg.ErrorMappings {
+func (h *Handler) applyErrorMapping(errorMappings []model.ErrorMapping, statusCode int, resp *http.Response) (int, io.ReadCloser) {
+	for _, m := range errorMappings {
 		if m.SourceCode == statusCode {
 			if m.Message != "" {
 				resp.Body.Close()
@@ -1165,7 +1305,9 @@ func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header 
 		// 流式：边写边扫描 usage
 		flusher, ok := c.Writer.(http.Flusher)
 		scanner := bufio.NewScanner(body)
-		scanner.Buffer(make([]byte, 256*1024), 256*1024)
+		scanBuf := scanBufPool.Get().([]byte)
+		defer scanBufPool.Put(scanBuf)
+		scanner.Buffer(scanBuf, 256*1024)
 		var sseBuf strings.Builder
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -1210,6 +1352,10 @@ func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header 
 
 // extractSSEUsage 从 SSE data 中提取 usage 信息
 func extractSSEUsage(data string, usage *Usage) {
+	// 快速跳过：只有 message_start 和 message_delta 包含 usage
+	if !strings.Contains(data, `"message_start"`) && !strings.Contains(data, `"message_delta"`) {
+		return
+	}
 	var event struct {
 		Type    string `json:"type"`
 		Message *struct {
@@ -1279,21 +1425,13 @@ func (h *Handler) markFault(upstreamID string, reason string) {
 	}
 }
 
-// extractUserID 从请求体中提取会话标识和原始 user_id JSON
-// 兼容两种格式:
-//   - 旧版: metadata.user_id = "some-string"
-//   - 新版: metadata.user_id = {"device_id":"...","account_uuid":"...","session_id":"..."}
-func extractUserID(body []byte) (sessionKey string, rawUserID string) {
-	var req struct {
-		Metadata map[string]any `json:"metadata"`
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
+// extractUserIDFromMap 从已解析的 map 中提取会话标识和原始 user_id JSON
+func extractUserIDFromMap(parsed map[string]any) (sessionKey string, rawUserID string) {
+	meta, _ := parsed["metadata"].(map[string]any)
+	if meta == nil {
 		return "", ""
 	}
-	if req.Metadata == nil {
-		return "", ""
-	}
-	uid := req.Metadata["user_id"]
+	uid := meta["user_id"]
 	if uid == nil {
 		return "", ""
 	}
@@ -1303,10 +1441,9 @@ func extractUserID(body []byte) (sessionKey string, rawUserID string) {
 	}
 	// 字符串类型：可能是纯字符串或双重编码的 JSON
 	if s, ok := uid.(string); ok {
-		// 尝试解析双重编码的 JSON 对象
 		var inner map[string]any
 		if json.Unmarshal([]byte(s), &inner) == nil {
-			rawUserID = s // 用解码后的 JSON 作为 raw
+			rawUserID = s
 			if sid, ok := inner["session_id"].(string); ok && sid != "" {
 				return sid, rawUserID
 			}
@@ -1349,40 +1486,6 @@ func parseRetryAfter(val string) time.Duration {
 	return 0
 }
 
-// extractModel 从请求体中提取模型名称
-func extractModel(body []byte) string {
-	var req struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		return ""
-	}
-	return req.Model
-}
-
-// extractStream 从请求体中提取 stream 字段，默认 false
-func extractStream(body []byte) bool {
-	var req struct {
-		Stream bool `json:"stream"`
-	}
-	json.Unmarshal(body, &req)
-	return req.Stream
-}
-
-// replaceModelInBody 替换请求体中的 model 字段
-func replaceModelInBody(body []byte, newModel string) []byte {
-	var data map[string]any
-	if err := json.Unmarshal(body, &data); err != nil {
-		return body
-	}
-	data["model"] = newModel
-	out, err := json.Marshal(data)
-	if err != nil {
-		return body
-	}
-	return out
-}
-
 // replaceModelInResponse 替换非流式响应中的 model 字段
 func replaceModelInResponse(data []byte, originalModel string) []byte {
 	var resp map[string]any
@@ -1406,6 +1509,10 @@ func replaceModelInSSELine(line string, originalModel string) string {
 		return line
 	}
 	data := line[6:]
+	// 快速跳过：不含 "model" 的行无需解析
+	if !strings.Contains(data, `"model"`) {
+		return line
+	}
 	var event map[string]any
 	if err := json.Unmarshal([]byte(data), &event); err != nil {
 		return line
@@ -1430,27 +1537,6 @@ func replaceModelInSSELine(line string, originalModel string) string {
 		return line
 	}
 	return "data: " + string(out)
-}
-
-// stripFields 从 JSON body 中剔除指定字段路径
-// 支持路径格式:
-//   - "betas"                         → 删除顶层 betas 字段
-//   - "system.*.cache_control.scope"  → 删除 system 数组每个元素的 cache_control.scope
-//   - "*" 匹配数组中的每个元素或对象中的每个 key
-func stripFields(body []byte, paths []string) []byte {
-	var data any
-	if err := json.Unmarshal(body, &data); err != nil {
-		return body
-	}
-	for _, path := range paths {
-		parts := strings.Split(path, ".")
-		stripPath(data, parts)
-	}
-	out, err := json.Marshal(data)
-	if err != nil {
-		return body
-	}
-	return out
 }
 
 func stripPath(node any, parts []string) {

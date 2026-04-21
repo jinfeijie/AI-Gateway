@@ -29,6 +29,7 @@ type Balancer struct {
 	sessionsMu   sync.RWMutex
 	sessionTTL   time.Duration
 	sessionsPath string // 持久化路径
+	stopCh       chan struct{}
 
 	// 负载追踪: upstreamID -> active request count
 	load sync.Map // upstreamID -> *int64
@@ -42,8 +43,9 @@ func NewBalancer(s *store.Store) *Balancer {
 		store:      s,
 		sessions:   make(map[string]*sessionBinding),
 		sessionTTL: 5 * time.Minute,
+		stopCh:     make(chan struct{}),
 	}
-	go b.cleanupLoop()
+	model.SafeGo("balancer.cleanupLoop", b.cleanupLoop)
 	return b
 }
 
@@ -56,17 +58,28 @@ func (b *Balancer) SetSessionsPath(dataPath string) {
 func (b *Balancer) cleanupLoop() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
-	for range ticker.C {
-		b.sessionsMu.Lock()
-		now := time.Now()
-		for k, v := range b.sessions {
-			if now.Sub(v.AccessedAt) > b.sessionTTL {
-				delete(b.sessions, k)
+	for {
+		select {
+		case <-b.stopCh:
+			b.saveSessions()
+			return
+		case <-ticker.C:
+			b.sessionsMu.Lock()
+			now := time.Now()
+			for k, v := range b.sessions {
+				if now.Sub(v.AccessedAt) > b.sessionTTL {
+					delete(b.sessions, k)
+				}
 			}
+			b.sessionsMu.Unlock()
+			b.saveSessions()
 		}
-		b.sessionsMu.Unlock()
-		b.saveSessions()
 	}
+}
+
+// Close 停止清理循环并保存会话
+func (b *Balancer) Close() {
+	close(b.stopCh)
 }
 
 type sessionFile struct {
@@ -151,8 +164,7 @@ func (b *Balancer) SetCooldown(upstreamID string, d time.Duration) {
 }
 
 // Pick 选择上游: 模型匹配 → 会话亲和 → 最少负载（跳过冷却中的上游）
-func (b *Balancer) Pick(groupID string, sessionKey string, rawUserID string, reqModel string, exclude map[string]bool) *model.Upstream {
-	cfg := b.store.Get()
+func (b *Balancer) Pick(cfg model.Config, groupID string, sessionKey string, rawUserID string, reqModel string, exclude map[string]bool) *model.Upstream {
 
 	// 查找分组配置
 	var groupModels []string
@@ -346,8 +358,7 @@ func (b *Balancer) CooldownInfo() map[string]time.Time {
 }
 
 // ActiveCount 返回指定分组中 active 且非冷却的上游数量
-func (b *Balancer) ActiveCount(groupID string) int {
-	cfg := b.store.Get()
+func (b *Balancer) ActiveCount(cfg model.Config, groupID string) int {
 	count := 0
 	for _, u := range cfg.Upstreams {
 		if u.GroupID == groupID && (u.Status == "active" || u.Status == "half_open") {
