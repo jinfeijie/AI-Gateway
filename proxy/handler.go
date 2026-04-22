@@ -1167,7 +1167,11 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		statusCode, respBody := h.applyErrorMapping(mappings, statusCode, resp)
 
 		// 写响应并捕获 usage
-		usage, respBodyBytes := h.writeResponseWithUsage(c, statusCode, resp.Header, respBody, originalModel, group.NoCache)
+		var sigReplacements []string
+		if group.SignatureEnabled {
+			sigReplacements = group.SignatureReplacements
+		}
+		usage, respBodyBytes := h.writeResponseWithUsage(c, statusCode, resp.Header, respBody, originalModel, group.NoCache, sigReplacements)
 
 		// 日志中记录用户请求的原始模型
 		logModel := reqModel
@@ -1302,7 +1306,66 @@ func httpStatusToAnthropicError(code int) string {
 	}
 }
 
-func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header http.Header, body io.ReadCloser, originalModel string, noCache bool) (Usage, []byte) {
+// replaceSignatureInSSELine 替换流式 SSE data 行中的 signature 字段
+func replaceSignatureInSSELine(line string, signatures []string) string {
+	if !strings.HasPrefix(line, "data: ") {
+		return line
+	}
+	data := line[6:]
+	if !strings.Contains(data, `"signature_delta"`) {
+		return line
+	}
+	var event map[string]any
+	if json.Unmarshal([]byte(data), &event) != nil {
+		return line
+	}
+	delta, ok := event["delta"].(map[string]any)
+	if !ok {
+		return line
+	}
+	if _, ok := delta["signature"]; !ok {
+		return line
+	}
+	delta["signature"] = signatures[rand.Intn(len(signatures))]
+	out, err := json.Marshal(event)
+	if err != nil {
+		return line
+	}
+	return "data: " + string(out)
+}
+
+// replaceSignatureInResponse 替换非流式响应中 content 数组里的 signature 字段
+func replaceSignatureInResponse(data []byte, signatures []string) []byte {
+	var resp map[string]any
+	if json.Unmarshal(data, &resp) != nil {
+		return data
+	}
+	content, ok := resp["content"].([]any)
+	if !ok {
+		return data
+	}
+	changed := false
+	for _, item := range content {
+		block, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, ok := block["signature"]; ok {
+			block["signature"] = signatures[rand.Intn(len(signatures))]
+			changed = true
+		}
+	}
+	if !changed {
+		return data
+	}
+	out, err := json.Marshal(resp)
+	if err != nil {
+		return data
+	}
+	return out
+}
+
+func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header http.Header, body io.ReadCloser, originalModel string, noCache bool, signatureReplacements []string) (Usage, []byte) {
 	defer body.Close()
 
 	// 是否需要做模型名替换
@@ -1345,6 +1408,10 @@ func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header 
 			if needModelReplace {
 				line = replaceModelInSSELine(line, originalModel)
 			}
+			// 签名替换
+			if len(signatureReplacements) > 0 {
+				line = replaceSignatureInSSELine(line, signatureReplacements)
+			}
 			// 无缓存模式：改写 SSE 中的 usage
 			if noCache && strings.HasPrefix(line, "data: ") {
 				line = rewriteSSENoCache(line)
@@ -1371,6 +1438,10 @@ func (h *Handler) writeResponseWithUsage(c *gin.Context, statusCode int, header 
 		// 模型映射：替换响应中的模型名
 		if needModelReplace {
 			data = replaceModelInResponse(data, originalModel)
+		}
+		// 签名替换
+		if len(signatureReplacements) > 0 {
+			data = replaceSignatureInResponse(data, signatureReplacements)
 		}
 		// 无缓存模式：改写响应中的 usage
 		if noCache {

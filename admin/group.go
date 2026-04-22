@@ -68,18 +68,20 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 	r.PUT("/groups/:id", func(c *gin.Context) {
 		id := c.Param("id")
 		var req struct {
-			Name           string                  `json:"name" binding:"required"`
-			Protocols      []string                `json:"protocols"`
-			Models         []string                `json:"models"`
-			ModelMapping   map[string]string       `json:"model_mapping"`
-			MaxConcurrency *int                    `json:"max_concurrency"`
-			FailoverRules  []model.FailoverRule     `json:"failover_rules"`
-			HealthCheck    *model.HealthCheckConfig `json:"health_check"`
-			LogMode        *string                 `json:"log_mode"`
-			LogSampleRate  *int                    `json:"log_sample_rate"`
-			AllowStream    *bool                   `json:"allow_stream"`
-			AllowNonStream *bool                   `json:"allow_non_stream"`
-			NoCache        *bool                   `json:"no_cache"`
+			Name                  string                  `json:"name" binding:"required"`
+			Protocols             []string                `json:"protocols"`
+			Models                []string                `json:"models"`
+			ModelMapping          map[string]string       `json:"model_mapping"`
+			MaxConcurrency        *int                    `json:"max_concurrency"`
+			FailoverRules         []model.FailoverRule     `json:"failover_rules"`
+			HealthCheck           *model.HealthCheckConfig `json:"health_check"`
+			LogMode               *string                 `json:"log_mode"`
+			LogSampleRate         *int                    `json:"log_sample_rate"`
+			AllowStream           *bool                   `json:"allow_stream"`
+			AllowNonStream        *bool                   `json:"allow_non_stream"`
+			NoCache               *bool                   `json:"no_cache"`
+			SignatureEnabled      *bool                   `json:"signature_enabled"`
+			SignatureReplacements *[]string               `json:"signature_replacements"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -122,6 +124,12 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 					}
 					if req.NoCache != nil {
 						cfg.Groups[i].NoCache = *req.NoCache
+					}
+					if req.SignatureEnabled != nil {
+						cfg.Groups[i].SignatureEnabled = *req.SignatureEnabled
+					}
+					if req.SignatureReplacements != nil {
+						cfg.Groups[i].SignatureReplacements = *req.SignatureReplacements
 					}
 					found = true
 					return
@@ -317,6 +325,55 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 						}
 					}
 					cfg.Upstreams = upstreams
+					return
+				}
+			}
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if !found {
+			c.JSON(http.StatusNotFound, gin.H{"error": "group not found"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "ok"})
+	})
+
+	// 获取分组签名替换列表
+	r.GET("/groups/:id/signatures", func(c *gin.Context) {
+		id := c.Param("id")
+		cfg := s.Get()
+		for _, g := range cfg.Groups {
+			if g.ID == id {
+				c.JSON(http.StatusOK, gin.H{"data": gin.H{"enabled": g.SignatureEnabled, "signatures": g.SignatureReplacements}})
+				return
+			}
+		}
+		c.JSON(http.StatusNotFound, gin.H{"error": "group not found"})
+	})
+
+	// 更新分组签名替换列表
+	r.PUT("/groups/:id/signatures", func(c *gin.Context) {
+		id := c.Param("id")
+		var req struct {
+			Enabled    *bool    `json:"enabled"`
+			Signatures []string `json:"signatures"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		var found bool
+		if err := s.Update(func(cfg *model.Config) {
+			for i := range cfg.Groups {
+				if cfg.Groups[i].ID == id {
+					if req.Enabled != nil {
+						cfg.Groups[i].SignatureEnabled = *req.Enabled
+					}
+					if req.Signatures != nil {
+						cfg.Groups[i].SignatureReplacements = req.Signatures
+					}
+					found = true
 					return
 				}
 			}

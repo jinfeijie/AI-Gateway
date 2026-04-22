@@ -62,6 +62,8 @@ type Group struct {
 	AllowNonStream *bool              `json:"allow_non_stream,omitempty"` // 允许非流式请求，默认 false
 	ModelMapping   map[string]string  `json:"model_mapping,omitempty"`   // 模型映射：用户请求模型 → 实际转发模型
 	NoCache        bool               `json:"no_cache,omitempty"`        // 无缓存模式：缓存读计入输入、缓存写计入输出，清零缓存字段
+	SignatureEnabled      bool        `json:"signature_enabled,omitempty"`      // 是否启用签名替换
+	SignatureReplacements []string    `json:"signature_replacements,omitempty"` // 思考签名替换列表，随机选一个替换响应中的 signature
 }
 
 // HealthCheckConfig 健康检查配置

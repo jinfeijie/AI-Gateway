@@ -116,6 +116,7 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
   <button class="tab" data-tab="ratelimit" onclick="showTab('ratelimit')">限流配置</button>
   <button class="tab" data-tab="reqlog" onclick="showTab('reqlog')">请求日志</button>
   <button class="tab" data-tab="pricing" onclick="showTab('pricing')">模型定价</button>
+  <button class="tab" data-tab="signatures" onclick="showTab('signatures')">签名替换</button>
 </div>
 <div id="msg"></div>
 
@@ -325,6 +326,29 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
       <button class="btn btn-sm" onclick="hideAddPricing()">取消</button>
     </div>
   </div>
+</div>
+
+<div id="signatures" class="panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <p style="font-size:13px;color:#9ca3af;margin:0">配置分组的思考签名替换，响应中的 signature 字段将被随机替换为列表中的一个。</p>
+    <div style="display:flex;gap:8px;align-items:center">
+      <select id="sig-group" onchange="loadSignatures()" style="padding:4px 8px;font-size:13px;border:1px solid #1f2937;background:#0f1419;color:#e4e7eb"></select>
+      <button class="btn btn-sm" onclick="loadSignatures()">刷新</button>
+    </div>
+  </div>
+  <div class="form-row" style="margin-bottom:16px">
+    <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="sig-enabled" onchange="toggleSignatureEnabled()">启用签名替换</label>
+    <span id="sig-status" style="font-size:12px;color:#6b7280;margin-left:8px"></span>
+  </div>
+  <div class="form-row">
+    <textarea id="sig-input" placeholder="粘贴签名内容（一行一个签名，或粘贴单个签名后点击添加）" style="flex:1;min-height:80px;font-family:'JetBrains Mono',monospace;font-size:12px"></textarea>
+    <button class="btn btn-primary" onclick="addSignature()">添加</button>
+  </div>
+  <div style="margin-bottom:12px;font-size:13px;color:#9ca3af" id="sig-count"></div>
+  <table>
+    <thead><tr><th style="width:60px">#</th><th>签名内容（前 80 字符）</th><th style="width:80px">操作</th></tr></thead>
+    <tbody id="sig-list"></tbody>
+  </table>
 </div>
 </div>
 
@@ -585,6 +609,7 @@ function showTab(id, push) {
   if (id === 'ratelimit') { loadRateLimit(); }
   if (id === 'reqlog') { loadReqLogs(); }
   if (id === 'pricing') { loadPricing(); }
+  if (id === 'signatures') { loadSignatureGroups(); }
   // 上游 tab 自动刷新
   if (id === 'upstreams') {
     loadUpstreams();
@@ -1946,6 +1971,88 @@ async function showLogDetail(idx) {
 function closeLogDetail() {
   document.getElementById('log-detail-mask').style.display = 'none';
   document.getElementById('log-detail-modal').style.display = 'none';
+}
+
+// Signatures
+let sigList = [];
+let sigEnabled = false;
+async function loadSignatureGroups() {
+  const r = await api('GET', '/groups');
+  const gs = r.data || [];
+  const sel = document.getElementById('sig-group');
+  const prev = sel.value;
+  sel.innerHTML = gs.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
+  if (prev && gs.some(g => g.id === prev)) sel.value = prev;
+  await loadSignatures();
+}
+async function loadSignatures() {
+  const gid = document.getElementById('sig-group').value;
+  if (!gid) { sigList = []; sigEnabled = false; renderSignatures([]); return; }
+  try {
+    const r = await api('GET', '/groups/' + gid + '/signatures');
+    const d = r.data || {};
+    sigEnabled = !!d.enabled;
+    sigList = d.signatures || [];
+  } catch(e) { sigList = []; sigEnabled = false; }
+  document.getElementById('sig-enabled').checked = sigEnabled;
+  document.getElementById('sig-status').textContent = sigEnabled ? '已启用' : '未启用';
+  document.getElementById('sig-status').style.color = sigEnabled ? '#00ff88' : '#6b7280';
+  renderSignatures(sigList);
+}
+async function toggleSignatureEnabled() {
+  const gid = document.getElementById('sig-group').value;
+  if (!gid) { msg('请先选择分组', false); return; }
+  const enabled = document.getElementById('sig-enabled').checked;
+  try {
+    await api('PUT', '/groups/' + gid + '/signatures', { enabled });
+    sigEnabled = enabled;
+    document.getElementById('sig-status').textContent = enabled ? '已启用' : '未启用';
+    document.getElementById('sig-status').style.color = enabled ? '#00ff88' : '#6b7280';
+    msg(enabled ? '签名替换已启用' : '签名替换已关闭', true);
+  } catch(e) { msg(e.message, false); document.getElementById('sig-enabled').checked = !enabled; }
+}
+function renderSignatures(list) {
+  document.getElementById('sig-count').textContent = list.length ? `共 ${list.length} 个签名` : '未配置签名，不做替换';
+  const tbody = document.getElementById('sig-list');
+  if (list.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#6b7280;padding:20px">暂无签名</td></tr>';
+    return;
+  }
+  tbody.innerHTML = list.map((s, i) => {
+    const preview = s.length > 80 ? s.substring(0, 80) + '...' : s;
+    return `<tr>
+      <td style="color:#6b7280">${i + 1}</td>
+      <td style="font-size:12px;font-family:monospace;white-space:normal;word-break:break-all">${escHtml(preview)}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="delSignature(${i})">删除</button></td>
+    </tr>`;
+  }).join('');
+}
+async function addSignature() {
+  const gid = document.getElementById('sig-group').value;
+  if (!gid) { msg('请先选择分组', false); return; }
+  const input = document.getElementById('sig-input');
+  const val = input.value.trim();
+  if (!val) return;
+  // 支持多行输入，每行一个签名
+  const lines = val.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  const newList = [...sigList, ...lines];
+  try {
+    await api('PUT', '/groups/' + gid + '/signatures', { signatures: newList });
+    input.value = '';
+    msg(`已添加 ${lines.length} 个签名`, true);
+    await loadSignatures();
+  } catch(e) { msg(e.message, false); }
+}
+async function delSignature(idx) {
+  const gid = document.getElementById('sig-group').value;
+  if (!gid) return;
+  const newList = [...sigList];
+  newList.splice(idx, 1);
+  try {
+    await api('PUT', '/groups/' + gid + '/signatures', { signatures: newList });
+    msg('已删除', true);
+    await loadSignatures();
+  } catch(e) { msg(e.message, false); }
 }
 
 // Init: 检查登录状态
