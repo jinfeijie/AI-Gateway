@@ -873,6 +873,7 @@ func (h *Handler) addUpstreamCost(upstreamID string, groupID string, cost float6
 
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	r.POST("/v1/messages", h.proxyMessages)
+	r.POST("/v1/chat/completions", h.proxyOpenAI)
 }
 
 // Balancer 返回负载均衡器实例
@@ -920,6 +921,21 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 	if group == nil {
 		anthropicError(c, http.StatusUnauthorized, "authentication_error", "invalid api key")
 		return
+	}
+
+	// 协议校验：如果分组配置了协议列表，需包含 "anthropic"
+	if len(group.Protocols) > 0 {
+		allowed := false
+		for _, p := range group.Protocols {
+			if p == "anthropic" {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			anthropicError(c, http.StatusForbidden, "permission_error", "anthropic protocol is not allowed in this group")
+			return
+		}
 	}
 
 	body, err := io.ReadAll(c.Request.Body)
@@ -1064,7 +1080,30 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 
 		h.balancer.IncLoad(upstream.ID)
 		attemptStart := time.Now()
-		resp, err := h.doRequest(c, upstream, body)
+
+		// 跨协议转换：如果上游是 OpenAI 协议，需要转换请求体
+		upstreamProtocol := upstream.EffectiveProtocol()
+		crossProtocol := upstreamProtocol == "openai"
+		var sendBody []byte
+		if crossProtocol {
+			converted := convertAnthropicRequestToOpenAI(parsed)
+			var marshalErr error
+			sendBody, marshalErr = json.Marshal(converted)
+			if marshalErr != nil {
+				h.balancer.DecLoad(upstream.ID)
+				log.Printf("[proxy] upstream %s (%s) protocol conversion marshal error: %v", upstream.ID, upstream.Remark, marshalErr)
+				continue
+			}
+		} else {
+			sendBody = body
+		}
+
+		var resp *http.Response
+		if crossProtocol {
+			resp, err = h.doRequestWithProtocol(c, upstream, sendBody, "openai")
+		} else {
+			resp, err = h.doRequest(c, upstream, sendBody)
+		}
 		ttfb := time.Since(attemptStart).Milliseconds()
 		h.balancer.DecLoad(upstream.ID)
 
@@ -1101,6 +1140,10 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			}
 			errBody, _ := io.ReadAll(errReader)
 			errReader.Close()
+			// 跨协议时将错误体转换为 Anthropic 格式
+			if crossProtocol {
+				errBody = convertOpenAIErrorToAnthropic(errBody, statusCode)
+			}
 			errBodyStr := string(errBody)
 			log.Printf("[proxy] upstream %s (%s) returned %d, action=%s, body: %s", upstream.ID, upstream.Remark, statusCode, rule.Action, errBodyStr)
 			detail := fmt.Sprintf("HTTP %d → %s", statusCode, rule.Action)
@@ -1125,7 +1168,6 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 						})
 					}
 					resp.Body.Close()
-					// 原样返回上游响应
 					c.Data(statusCode, "application/json", errBody)
 					return
 				}
@@ -1176,14 +1218,61 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		if len(mappings) == 0 {
 			mappings = cfg.ErrorMappings
 		}
-		statusCode, respBody := h.applyErrorMapping(mappings, statusCode, resp)
 
 		// 写响应并捕获 usage
 		var sigReplacements []string
 		if group.SignatureEnabled {
 			sigReplacements = group.SignatureReplacements
 		}
-		usage, respBodyBytes := h.writeResponseWithUsage(c, statusCode, resp.Header, respBody, originalModel, group.NoCache, sigReplacements)
+
+		var usage Usage
+		var respBodyBytes []byte
+
+		if crossProtocol {
+			// 上游是 OpenAI 协议，需要将响应转换为 Anthropic 格式
+			statusCode, respBody := h.applyOpenAIErrorMapping(mappings, statusCode, resp)
+			if reqStream && isSSE(resp.Header) {
+				// 流式：OpenAI SSE → Anthropic SSE
+				usage, respBodyBytes = convertOpenAISSEToAnthropic(c, statusCode, resp.Header, respBody, originalModel)
+			} else {
+				// 非流式：读取 OpenAI 响应，转换为 Anthropic 格式
+				defer respBody.Close()
+				contentEncoding := strings.ToLower(resp.Header.Get("Content-Encoding"))
+				decodedBody := respBody
+				if contentEncoding != "" {
+					if r, decErr := newDecompressReader(contentEncoding, respBody); decErr == nil {
+						decodedBody = r
+						resp.Header.Del("Content-Encoding")
+					}
+				}
+				data, _ := io.ReadAll(decodedBody)
+				var converted []byte
+				if statusCode < 400 {
+					converted, usage = convertOpenAIResponseToAnthropic(data)
+				} else {
+					converted = convertOpenAIErrorToAnthropic(data, statusCode)
+				}
+				if originalModel != "" {
+					converted = replaceModelInResponse(converted, originalModel)
+				}
+				for key, vals := range resp.Header {
+					if strings.ToLower(key) == "content-length" {
+						continue
+					}
+					for _, v := range vals {
+						c.Writer.Header().Add(key, v)
+					}
+				}
+				c.Writer.Header().Set("Content-Type", "application/json")
+				c.Writer.WriteHeader(statusCode)
+				c.Writer.Write(converted)
+				respBodyBytes = converted
+			}
+		} else {
+			// 上游是 Anthropic 协议，直接透传
+			statusCode, respBody := h.applyErrorMapping(mappings, statusCode, resp)
+			usage, respBodyBytes = h.writeResponseWithUsage(c, statusCode, resp.Header, respBody, originalModel, group.NoCache, sigReplacements)
+		}
 
 		// 日志中记录用户请求的原始模型
 		logModel := reqModel
@@ -1812,7 +1901,10 @@ func injectPath(node any, parts []string, value any) {
 				injectPath(child, rest, value)
 			}
 		} else if len(rest) == 0 {
-			v[key] = value
+			// 最后一段，仅在 key 不存在时注入
+			if _, exists := v[key]; !exists {
+				v[key] = value
+			}
 		} else {
 			child, ok := v[key]
 			if !ok {

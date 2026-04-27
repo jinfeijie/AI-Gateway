@@ -14,6 +14,7 @@ type Upstream struct {
 	FaultType      string   `json:"fault_type,omitempty"`      // auto / manual
 	FaultReason    string   `json:"fault_reason,omitempty"`    // 故障原因
 	Weight         *int     `json:"weight,omitempty"`          // 权重：nil=默认1，0=暂停流量，>0=加权值
+	Protocol       string   `json:"protocol,omitempty"`        // 上游协议: "anthropic"（默认）/ "openai"
 	Source         string   `json:"source,omitempty"`          // "manual"（默认）或 "registry"
 	HeartbeatAt    *int64   `json:"heartbeat_at,omitempty"`    // 最后心跳时间戳（仅 registry）
 	NoOverride     bool     `json:"no_override,omitempty"`     // 禁止注册 API 覆盖
@@ -25,6 +26,14 @@ func (u *Upstream) EffectiveWeight() int {
 		return 1
 	}
 	return *u.Weight
+}
+
+// EffectiveProtocol 返回实际生效的协议，空字符串视为 "anthropic"
+func (u *Upstream) EffectiveProtocol() string {
+	if u.Protocol == "" {
+		return "anthropic"
+	}
+	return u.Protocol
 }
 
 // FailoverRule 故障转移规则

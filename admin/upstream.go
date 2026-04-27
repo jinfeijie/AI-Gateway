@@ -67,6 +67,7 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 			MaxConcurrency int      `json:"max_concurrency"`
 			Weight         *int     `json:"weight"`
 			NoOverride     bool     `json:"no_override"`
+			Protocol       string   `json:"protocol"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -97,6 +98,7 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 			Weight:         req.Weight,
 			Source:         "manual",
 			NoOverride:     req.NoOverride,
+			Protocol:       req.Protocol,
 		}
 		if err := s.Update(func(cfg *model.Config) {
 			cfg.Upstreams = append(cfg.Upstreams, u)
@@ -117,6 +119,7 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 			MaxConcurrency *int      `json:"max_concurrency"`  // 指针区分未传和传 0
 			Weight         **int     `json:"weight"`           // 二级指针：nil=未传，*nil=清除(恢复默认)，**int=设值
 			NoOverride     *bool     `json:"no_override"`      // 指针区分未传和传 false
+			Protocol       *string   `json:"protocol"`         // 指针区分未传和传空字符串
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -146,6 +149,9 @@ func registerUpstreamRoutes(r *gin.RouterGroup, s *store.Store, bq BalancerQueri
 					}
 					if req.NoOverride != nil {
 						cfg.Upstreams[i].NoOverride = *req.NoOverride
+					}
+					if req.Protocol != nil {
+						cfg.Upstreams[i].Protocol = *req.Protocol
 					}
 					found = true
 					return

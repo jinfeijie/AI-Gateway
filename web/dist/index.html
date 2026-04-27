@@ -126,7 +126,7 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
     <button class="btn btn-primary" onclick="showAddGroupModal()">添加分组</button>
   </div>
   <table>
-    <thead><tr><th>ID</th><th>名称</th><th>协议</th><th>支持模型</th><th>请求模式</th><th>日志模式</th><th>今日花费</th><th>总花费</th><th>API Key</th><th>操作</th></tr></thead>
+    <thead><tr><th>ID</th><th>名称</th><th>客户端协议</th><th>支持模型</th><th>请求模式</th><th>日志模式</th><th>今日花费</th><th>总花费</th><th>API Key</th><th>操作</th></tr></thead>
     <tbody id="g-list"></tbody>
   </table>
 </div>
@@ -139,12 +139,13 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
     <button class="btn btn-primary" onclick="batchProbe()" id="batch-probe-btn">批量测活</button>
   </div>
   <div style="overflow-x:auto">
-  <table style="table-layout:fixed;min-width:1425px">
+  <table style="table-layout:fixed;min-width:1480px">
     <colgroup>
       <col style="width:80px">
       <col style="width:140px">
       <col style="width:60px">
       <col style="width:130px">
+      <col style="width:55px">
       <col style="width:65px">
       <col style="width:60px">
       <col style="width:60px">
@@ -156,7 +157,7 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
       <col style="width:80px">
       <col style="width:260px">
     </colgroup>
-    <thead><tr><th>ID</th><th>API</th><th>分组</th><th>模型</th><th>权重/来源</th><th>状态</th><th>首包延迟</th><th>延迟</th><th>今日请求</th><th>今日花费</th><th>总花费</th><th>故障信息</th><th>备注</th><th>操作</th></tr></thead>
+    <thead><tr><th>ID</th><th>API</th><th>分组</th><th>模型</th><th>后端协议</th><th>权重/来源</th><th>状态</th><th>首包延迟</th><th>延迟</th><th>今日请求</th><th>今日花费</th><th>总花费</th><th>故障信息</th><th>备注</th><th>操作</th></tr></thead>
     <tbody id="u-list"></tbody>
     <tfoot id="u-foot"></tfoot>
   </table>
@@ -384,6 +385,7 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
   <div class="form-row"><label>API 地址</label><input id="edit-api"></div>
   <div class="form-row"><label>API Key</label><input id="edit-key" placeholder="留空则不修改"></div>
   <div class="form-row"><label>备注</label><input id="edit-remark"></div>
+  <div class="form-row"><label>后端协议</label><select id="edit-protocol" style="width:160px"><option value="">Anthropic</option><option value="openai">OpenAI</option></select></div>
   <div class="form-row"><label>权重</label><input type="number" id="edit-weight" min="0" style="width:80px"><span style="font-size:12px;color:#6b7280;margin-left:8px">设为 0 暂停接收流量</span></div>
   <div class="form-row"><label>禁止覆盖</label><input type="checkbox" id="edit-no-override"><span style="font-size:12px;color:#6b7280;margin-left:8px">勾选后注册中心无法覆盖此上游配置</span></div>
   <div class="form-row" style="align-items:flex-start"><label>支持模型</label><div id="edit-models-area" style="flex:1"></div></div>
@@ -398,7 +400,7 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
 <div id="add-group-modal" class="modal" style="display:none">
   <h3>添加分组</h3>
   <div class="form-row"><label>分组名称</label><input id="g-name" placeholder="输入分组名称"></div>
-  <div class="form-row" style="align-items:flex-start"><label>协议</label>
+  <div class="form-row" style="align-items:flex-start"><label>客户端协议</label>
     <div id="g-protocols" style="flex:1;display:flex;flex-wrap:wrap;gap:6px">
       <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="g-proto-cb" value="anthropic" checked><span class="tag tag-green" style="font-size:12px">Anthropic Claude</span></label>
       <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="g-proto-cb" value="openai"><span class="tag tag-blue" style="font-size:12px">OpenAI</span></label>
@@ -441,6 +443,7 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
   <div class="form-row"><label>API 地址</label><input id="u-api" placeholder="如 https://api.anthropic.com"></div>
   <div class="form-row"><label>API Key</label><input id="u-key" placeholder="API Key"></div>
   <div class="form-row"><label>备注</label><input id="u-remark" placeholder="备注（可选）"></div>
+  <div class="form-row"><label>后端协议</label><select id="u-protocol" style="width:160px"><option value="" selected>Anthropic</option><option value="openai">OpenAI</option></select></div>
   <div class="form-row"><label>权重</label><input type="number" id="u-weight" min="0" value="1" style="width:80px"><span style="font-size:12px;color:#6b7280;margin-left:8px">设为 0 暂停接收流量，默认 1</span></div>
   <div class="form-row"><label>禁止覆盖</label><input type="checkbox" id="u-no-override"><span style="font-size:12px;color:#6b7280;margin-left:8px">勾选后注册中心无法覆盖此上游配置</span></div>
   <div class="modal-footer">
@@ -458,7 +461,7 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
   </div>
   <input type="hidden" id="gm-id">
   <div class="form-row"><label>分组名称</label><input id="gm-name" placeholder="分组名称"></div>
-  <div class="form-row" style="align-items:flex-start"><label>协议</label>
+  <div class="form-row" style="align-items:flex-start"><label>客户端协议</label>
     <div id="gm-protocols" style="flex:1;display:flex;flex-wrap:wrap;gap:6px">
       <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="gm-proto-cb" value="anthropic"><span class="tag tag-green" style="font-size:12px">Anthropic Claude</span></label>
       <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="gm-proto-cb" value="openai"><span class="tag tag-blue" style="font-size:12px">OpenAI</span></label>
@@ -1062,6 +1065,7 @@ async function loadUpstreams() {
       <td style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(u.api)}">${escHtml(u.api)}</td>
       <td>${groupName(u.group_id)}</td>
       <td style="font-size:11px;overflow:hidden">${(u.models && u.models.length) ? '<div style="display:flex;flex-direction:column;gap:2px">' + u.models.map(m => '<span class="tag tag-green" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + m + '</span>').join('') + '</div>' : '<span style="color:#6b7280">继承分组</span>'}</td>
+      <td style="font-size:12px">${(()=>{const p=u.protocol||'';return p==='openai'?'<span class="tag tag-blue" style="font-size:11px">OpenAI</span>':'<span class="tag tag-green" style="font-size:11px">Anthropic</span>';})()}</td>
       <td style="font-size:12px">${(()=>{
         const w = u.weight != null ? u.weight : 1;
         let wHtml = w === 0 ? '<span style="color:#ff4444;font-weight:600">暂停</span>' : '<span style="font-weight:600">' + w + '</span>';
@@ -1097,7 +1101,7 @@ async function loadUpstreams() {
   const siteTotalCost = siteStats.total_cost || 0;
   const siteTotalReqs = siteStats.total_requests || 0;
   document.getElementById('u-foot').innerHTML = `<tr style="background:#0f1419;border-top:2px solid #00ff88;font-weight:600">
-    <td colspan="9" style="text-align:right">全站合计</td>
+    <td colspan="10" style="text-align:right">全站合计</td>
     <td style="color:#9ca3af">${siteTodayReqs}</td>
     <td style="color:#00ff88">$${siteTodayCost.toFixed(4)}</td>
     <td style="color:#ffaa00">$${siteTotalCost.toFixed(4)} (${siteTotalReqs}次)</td>
@@ -1135,6 +1139,7 @@ function hideAddForm() {
   document.getElementById('u-remark').value = '';
   document.getElementById('u-weight').value = '1';
   document.getElementById('u-no-override').checked = false;
+  document.getElementById('u-protocol').value = '';
 }
 async function addUpstream() {
   const gid = document.getElementById('u-group').value;
@@ -1143,9 +1148,10 @@ async function addUpstream() {
   const r = document.getElementById('u-remark').value.trim();
   const w = parseInt(document.getElementById('u-weight').value);
   const no = document.getElementById('u-no-override').checked;
+  const proto = document.getElementById('u-protocol').value;
   if (!gid) { msg('请先选择分组', false); return; }
   if (!a || !k) { msg('请填写完整', false); return; }
-  const body = { group_id: gid, api: a, api_key: k, remark: r, no_override: no };
+  const body = { group_id: gid, api: a, api_key: k, remark: r, no_override: no, protocol: proto };
   if (!isNaN(w)) body.weight = w;
   try { await api('POST', '/upstreams', body); msg('上游已添加', true); hideAddForm(); loadUpstreams(); }
   catch(e) { msg(e.message, false); }
@@ -1172,6 +1178,7 @@ function editUp(id) {
   document.getElementById('edit-remark').value = u.remark || '';
   document.getElementById('edit-weight').value = u.weight != null ? u.weight : 1;
   document.getElementById('edit-no-override').checked = !!u.no_override;
+  document.getElementById('edit-protocol').value = u.protocol || '';
   // registry 上游禁止编辑"禁止覆盖"
   document.getElementById('edit-no-override').disabled = u.source === 'registry';
   // 根据分组模型配置渲染模型选择区域
@@ -1208,6 +1215,7 @@ async function saveEditUpstream() {
   body.remark = r;
   if (!isNaN(w)) body.weight = w;
   body.no_override = document.getElementById('edit-no-override').checked;
+  body.protocol = document.getElementById('edit-protocol').value;
   // 从 checkbox 收集选中的模型
   const cbs = document.querySelectorAll('.edit-model-cb');
   if (cbs.length > 0) {
