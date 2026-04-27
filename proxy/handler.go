@@ -997,6 +997,18 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		}
 	}
 
+	// 字段注入（分组优先，全局兜底）
+	injectFieldsCfg := group.InjectFields
+	if len(injectFieldsCfg) == 0 {
+		injectFieldsCfg = cfg.InjectFields
+	}
+	if len(injectFieldsCfg) > 0 {
+		for _, f := range injectFieldsCfg {
+			parts := strings.Split(f.Path, ".")
+			injectPath(parsed, parts, f.Value)
+		}
+	}
+
 	// 单次序列化：模型替换和字段剔除后重新生成 body
 	body, err = json.Marshal(parsed)
 	if err != nil {
@@ -1778,6 +1790,50 @@ func stripPath(node any, parts []string) {
 					return // 不删除数组元素
 				}
 				stripPath(v[idx], rest)
+			}
+		}
+	}
+}
+
+func injectPath(node any, parts []string, value any) {
+	if len(parts) == 0 {
+		return
+	}
+	key := parts[0]
+	rest := parts[1:]
+
+	switch v := node.(type) {
+	case map[string]any:
+		if key == "*" {
+			if len(rest) == 0 {
+				return
+			}
+			for _, child := range v {
+				injectPath(child, rest, value)
+			}
+		} else if len(rest) == 0 {
+			v[key] = value
+		} else {
+			child, ok := v[key]
+			if !ok {
+				// 中间路径不存在，自动创建空 map
+				child = map[string]any{}
+				v[key] = child
+			}
+			injectPath(child, rest, value)
+		}
+	case []any:
+		if key == "*" {
+			for _, elem := range v {
+				injectPath(elem, rest, value)
+			}
+		} else {
+			idx := 0
+			if _, err := fmt.Sscanf(key, "%d", &idx); err == nil && idx >= 0 && idx < len(v) {
+				if len(rest) == 0 {
+					return
+				}
+				injectPath(v[idx], rest, value)
 			}
 		}
 	}

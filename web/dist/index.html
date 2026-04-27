@@ -244,6 +244,18 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
   </div>
   <div id="sf-list" style="display:flex;flex-wrap:wrap;gap:6px"></div>
   </div>
+
+  <div id="if-section">
+  <hr style="margin:24px 0;border:none;border-top:1px solid #1f2937">
+  <h4 style="margin:0 0 8px;font-size:15px">字段注入</h4>
+  <p style="font-size:13px;color:#9ca3af;margin:0 0 12px">转发前向请求体中注入指定字段。支持通配符 <code>*</code> 匹配数组元素。值为 JSON 格式。</p>
+  <div class="form-row">
+    <input id="if-path" placeholder="字段路径，如 system.*.cache_control" style="font-family:monospace;flex:1">
+    <input id="if-value" placeholder='值（JSON），如 {"type":"ephemeral"}' style="font-family:monospace;flex:1">
+    <button class="btn btn-primary" onclick="addInjectField()">添加</button>
+  </div>
+  <div id="if-list" style="margin-top:8px"></div>
+  </div>
 </div>
 
 <!-- 会话亲和 -->
@@ -563,7 +575,7 @@ function showLogin() {
 function showApp() {
   document.getElementById('login-page').style.display = 'none';
   document.getElementById('app').style.display = '';
-  loadGroups(); loadUpstreams(); loadHealthCheck(); loadErrorMappings(); loadStripFields();
+  loadGroups(); loadUpstreams(); loadHealthCheck(); loadErrorMappings(); loadStripFields(); loadInjectFields();
   restoreTab();
 }
 
@@ -1522,7 +1534,9 @@ async function loadErrorMappingData() {
     hint.textContent = '分组未配置时使用全局映射兜底';
   }
   document.getElementById('sf-section').style.display = '';
+  document.getElementById('if-section').style.display = '';
   await loadStripFieldData();
+  await loadInjectFieldData();
   renderErrorMappings();
 }
 function renderErrorMappings() {
@@ -1588,6 +1602,50 @@ async function delStripField(idx) {
   const url = emScope ? '/groups/' + emScope + '/strip-fields' : '/strip-fields';
   try { await api('PUT', url, stripFields); msg('已删除', true); renderStripFields(); }
   catch(e) { stripFields.splice(idx, 0, ...removed); msg(e.message, false); }
+}
+
+// Inject Fields
+let injectFields = [];
+async function loadInjectFields() {
+  await loadInjectFieldData();
+}
+async function loadInjectFieldData() {
+  const url = emScope ? '/groups/' + emScope + '/inject-fields' : '/inject-fields';
+  const r = await api('GET', url);
+  injectFields = r.data || [];
+  renderInjectFields();
+}
+function renderInjectFields() {
+  const container = document.getElementById('if-list');
+  if (injectFields.length === 0) {
+    const hint = emScope ? '未配置，将使用全局字段注入兜底' : '未配置，不注入任何字段';
+    container.innerHTML = '<span style="color:#6b7280;font-size:13px">' + hint + '</span>';
+    return;
+  }
+  container.innerHTML = '<table style="width:100%;font-size:13px"><thead><tr><th style="text-align:left">路径</th><th style="text-align:left">值</th><th>操作</th></tr></thead><tbody>' +
+    injectFields.map((f, i) => `<tr><td><code>${f.path}</code></td><td><code>${JSON.stringify(f.value)}</code></td><td style="text-align:center"><span class="tag-rm" style="cursor:pointer;color:#ef4444" onclick="delInjectField(${i})">&times;</span></td></tr>`).join('') +
+    '</tbody></table>';
+}
+async function addInjectField() {
+  const pathInput = document.getElementById('if-path');
+  const valueInput = document.getElementById('if-value');
+  const path = pathInput.value.trim();
+  const valStr = valueInput.value.trim();
+  if (!path || !valStr) return;
+  let value;
+  try { value = JSON.parse(valStr); } catch(e) { value = valStr; }
+  if (injectFields.some(f => f.path === path)) { msg('路径已存在', false); return; }
+  const item = {path: path, value: value};
+  injectFields.push(item);
+  const url = emScope ? '/groups/' + emScope + '/inject-fields' : '/inject-fields';
+  try { await api('PUT', url, injectFields); pathInput.value = ''; valueInput.value = ''; msg('已添加', true); renderInjectFields(); }
+  catch(e) { injectFields.pop(); msg(e.message, false); }
+}
+async function delInjectField(idx) {
+  const removed = injectFields.splice(idx, 1);
+  const url = emScope ? '/groups/' + emScope + '/inject-fields' : '/inject-fields';
+  try { await api('PUT', url, injectFields); msg('已删除', true); renderInjectFields(); }
+  catch(e) { injectFields.splice(idx, 0, ...removed); msg(e.message, false); }
 }
 
 // Sessions

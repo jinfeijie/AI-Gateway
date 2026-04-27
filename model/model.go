@@ -56,6 +56,7 @@ type Group struct {
 	HealthCheck    *HealthCheckConfig `json:"health_check,omitempty"`
 	ErrorMappings  []ErrorMapping     `json:"error_mappings,omitempty"` // 分组级错误码映射，优先于全局
 	StripFields    []string           `json:"strip_fields,omitempty"`   // 分组级字段剔除，优先于全局
+	InjectFields   []InjectField      `json:"inject_fields,omitempty"`  // 分组级字段注入，优先于全局
 	LogMode        string             `json:"log_mode,omitempty"`        // off / random / random_session / all（默认 all）
 	LogSampleRate  int                `json:"log_sample_rate,omitempty"` // 采样率百分比 1-100，默认 10
 	AllowStream    *bool              `json:"allow_stream,omitempty"`    // 允许流式请求，默认 true
@@ -74,6 +75,12 @@ type HealthCheckConfig struct {
 	TimeoutS  int               `json:"timeout_s"`
 	Headers   map[string]string `json:"headers,omitempty"`
 	Body      string            `json:"body,omitempty"`
+}
+
+// InjectField 字段注入配置
+type InjectField struct {
+	Path  string `json:"path"`  // 注入路径，如 system.*.cache_control
+	Value any    `json:"value"` // 注入值，如 {"type":"ephemeral"}
 }
 
 // ErrorMapping 错误码映射
@@ -103,6 +110,7 @@ type Config struct {
 	HealthCheck       HealthCheckConfig `json:"health_check"`
 	ErrorMappings     []ErrorMapping    `json:"error_mappings"`
 	StripFields       []string          `json:"strip_fields,omitempty"`
+	InjectFields      []InjectField     `json:"inject_fields,omitempty"`
 	ProbeModels       []string          `json:"probe_models,omitempty"`
 	DefaultProbeModel string            `json:"default_probe_model,omitempty"`
 	ModelPricing      []ModelPricing    `json:"model_pricing,omitempty"`
