@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"ai-gateway/model"
 
@@ -101,8 +102,8 @@ func convertOpenAIMessagesToAnthropic(msgs []any) (system string, result []any) 
 		role, _ := m["role"].(string)
 
 		switch role {
-		case "system":
-			// system 消息提取为顶层 system 参数
+		case "system", "developer":
+			// system / developer 消息提取为顶层 system 参数
 			if content, ok := m["content"].(string); ok {
 				systemParts = append(systemParts, content)
 			} else if parts, ok := m["content"].([]any); ok {
@@ -303,7 +304,7 @@ func convertOpenAIToolChoiceToAnthropic(tc any) any {
 		case "auto":
 			return map[string]any{"type": "auto"}
 		case "none":
-			return map[string]any{"type": "any"} // Anthropic 没有 none，用 any 近似
+			return map[string]any{"type": "auto"} // Anthropic 没有 none，用 auto 避免强制调用
 		case "required":
 			return map[string]any{"type": "any"}
 		default:
@@ -377,6 +378,10 @@ func convertAnthropicRequestToOpenAI(parsed map[string]any) map[string]any {
 	// stream
 	if s, ok := parsed["stream"]; ok {
 		result["stream"] = s
+		// OpenAI 流式默认不返回 usage，需注入 stream_options 确保拿到 usage
+		if sb, ok := s.(bool); ok && sb {
+			result["stream_options"] = map[string]any{"include_usage": true}
+		}
 	}
 
 	// temperature
@@ -639,7 +644,7 @@ func convertAnthropicResponseToOpenAI(data []byte) ([]byte, OpenAIUsage) {
 
 	// 转换 content
 	content, _ := resp["content"].([]any)
-	var textContent string
+	var textParts []string
 	var toolCalls []any
 	for _, block := range content {
 		b, ok := block.(map[string]any)
@@ -650,7 +655,11 @@ func convertAnthropicResponseToOpenAI(data []byte) ([]byte, OpenAIUsage) {
 		switch blockType {
 		case "text":
 			if t, ok := b["text"].(string); ok {
-				textContent = t
+				textParts = append(textParts, t)
+			}
+		case "thinking":
+			if t, ok := b["thinking"].(string); ok && t != "" {
+				textParts = append(textParts, t)
 			}
 		case "tool_use":
 			id, _ := b["id"].(string)
@@ -668,18 +677,31 @@ func convertAnthropicResponseToOpenAI(data []byte) ([]byte, OpenAIUsage) {
 		}
 	}
 
-	// 转换 usage
+	// 转换 usage：Anthropic input_tokens 不含缓存，OpenAI prompt_tokens 含缓存
 	var usage OpenAIUsage
 	if u, ok := resp["usage"].(map[string]any); ok {
+		inputTokens := 0
+		cacheRead := 0
+		cacheWrite := 0
 		if v, ok := u["input_tokens"].(float64); ok {
-			usage.PromptTokens = int(v)
+			inputTokens = int(v)
 		}
+		if v, ok := u["cache_read_input_tokens"].(float64); ok {
+			cacheRead = int(v)
+		}
+		if v, ok := u["cache_creation_input_tokens"].(float64); ok {
+			cacheWrite = int(v)
+		}
+		usage.PromptTokens = inputTokens + cacheRead + cacheWrite // OpenAI prompt_tokens = 总输入
+		usage.CachedTokens = cacheRead
+		usage.CacheWriteTokens = cacheWrite
 		if v, ok := u["output_tokens"].(float64); ok {
 			usage.CompletionTokens = int(v)
 		}
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
 
+	textContent := strings.Join(textParts, "\n")
 	choice := map[string]any{
 		"index": 0,
 		"message": map[string]any{
@@ -692,16 +714,25 @@ func convertAnthropicResponseToOpenAI(data []byte) ([]byte, OpenAIUsage) {
 		choice["message"].(map[string]any)["tool_calls"] = toolCalls
 	}
 
+	usageMap := map[string]any{
+		"prompt_tokens":     usage.PromptTokens,
+		"completion_tokens": usage.CompletionTokens,
+		"total_tokens":      usage.TotalTokens,
+		"prompt_tokens_details": map[string]any{
+			"cached_tokens":      usage.CachedTokens,
+			"cache_write_tokens": usage.CacheWriteTokens,
+		},
+		"completion_tokens_details": map[string]any{
+			"reasoning_tokens": 0,
+		},
+	}
 	openAIResp := map[string]any{
 		"id":      "chatcmpl-" + id,
 		"object":  "chat.completion",
+		"created": time.Now().Unix(),
 		"model":   mdl,
 		"choices": []any{choice},
-		"usage": map[string]any{
-			"prompt_tokens":     usage.PromptTokens,
-			"completion_tokens": usage.CompletionTokens,
-			"total_tokens":      usage.TotalTokens,
-		},
+		"usage":   usageMap,
 	}
 
 	out, err := json.Marshal(openAIResp)
@@ -725,14 +756,30 @@ func convertOpenAIResponseToAnthropic(data []byte) ([]byte, Usage) {
 	mdl, _ := resp["model"].(string)
 	id, _ := resp["id"].(string)
 
+	// OpenAI prompt_tokens 含缓存，需拆分
 	var usage Usage
 	if u, ok := resp["usage"].(map[string]any); ok {
+		promptTokens := 0
+		cachedTokens := 0
+		cacheWriteTokens := 0
 		if v, ok := u["prompt_tokens"].(float64); ok {
-			usage.InputTokens = int(v)
+			promptTokens = int(v)
 		}
 		if v, ok := u["completion_tokens"].(float64); ok {
 			usage.OutputTokens = int(v)
 		}
+		// 提取 cached_tokens 和 cache_write_tokens（OpenRouter）
+		if details, ok := u["prompt_tokens_details"].(map[string]any); ok {
+			if v, ok := details["cached_tokens"].(float64); ok {
+				cachedTokens = int(v)
+			}
+			if v, ok := details["cache_write_tokens"].(float64); ok {
+				cacheWriteTokens = int(v)
+			}
+		}
+		usage.InputTokens = promptTokens - cachedTokens - cacheWriteTokens
+		usage.CacheReadInputTokens = cachedTokens
+		usage.CacheCreationInputTokens = cacheWriteTokens
 	}
 
 	// 提取 choice
@@ -784,6 +831,17 @@ func convertOpenAIResponseToAnthropic(data []byte) ([]byte, Usage) {
 		contentBlocks = []any{map[string]any{"type": "text", "text": ""}}
 	}
 
+	usageMap := map[string]any{
+		"input_tokens":  usage.InputTokens,
+		"output_tokens": usage.OutputTokens,
+	}
+	if usage.CacheReadInputTokens > 0 {
+		usageMap["cache_read_input_tokens"] = usage.CacheReadInputTokens
+	}
+	if usage.CacheCreationInputTokens > 0 {
+		usageMap["cache_creation_input_tokens"] = usage.CacheCreationInputTokens
+	}
+
 	anthropicResp := map[string]any{
 		"id":          id,
 		"type":        "message",
@@ -791,10 +849,7 @@ func convertOpenAIResponseToAnthropic(data []byte) ([]byte, Usage) {
 		"model":       mdl,
 		"content":     contentBlocks,
 		"stop_reason": stopReason,
-		"usage": map[string]any{
-			"input_tokens":  usage.InputTokens,
-			"output_tokens": usage.OutputTokens,
-		},
+		"usage":       usageMap,
 	}
 
 	out, err := json.Marshal(anthropicResp)
@@ -810,7 +865,7 @@ func convertOpenAIResponseToAnthropic(data []byte) ([]byte, Usage) {
 
 // convertAnthropicSSEToOpenAI 将 Anthropic SSE 流转换为 OpenAI SSE 流
 // 返回转换后的 response body、提取的 usage
-func convertAnthropicSSEToOpenAI(c *gin.Context, statusCode int, header http.Header, body io.ReadCloser, originalModel string) (OpenAIUsage, []byte) {
+func convertAnthropicSSEToOpenAI(c *gin.Context, statusCode int, header http.Header, body io.ReadCloser, originalModel string, noCache bool) (OpenAIUsage, []byte) {
 	defer body.Close()
 
 	// 解压
@@ -836,7 +891,7 @@ func convertAnthropicSSEToOpenAI(c *gin.Context, statusCode int, header http.Hea
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.WriteHeader(statusCode)
 
-	flusher, ok := c.Writer.(http.Flusher)
+	flusher, hasFlusher := c.Writer.(http.Flusher)
 	scanner := bufio.NewScanner(decodedBody)
 	scanBuf := scanBufPool.Get().([]byte)
 	defer scanBufPool.Put(scanBuf)
@@ -847,6 +902,9 @@ func convertAnthropicSSEToOpenAI(c *gin.Context, statusCode int, header http.Hea
 	var msgID string
 	var mdl string
 	contentBlockIdx := 0
+	toolCallIdx := -1 // OpenAI tool_calls index，独立于 Anthropic content_block index
+	// Anthropic content_block index → OpenAI tool_calls index 映射
+	blockToToolIdx := make(map[int]int)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -875,17 +933,29 @@ func convertAnthropicSSEToOpenAI(c *gin.Context, statusCode int, header http.Hea
 				if originalModel != "" {
 					mdl = originalModel
 				}
-				// 提取 input usage
+				// 提取 input usage：Anthropic input_tokens 不含缓存
 				if u, ok := msg["usage"].(map[string]any); ok {
+					inputTokens := 0
+					cacheRead := 0
+					cacheWrite := 0
 					if v, ok := u["input_tokens"].(float64); ok {
-						usage.PromptTokens = int(v)
+						inputTokens = int(v)
 					}
+					if v, ok := u["cache_read_input_tokens"].(float64); ok {
+						cacheRead = int(v)
+					}
+					if v, ok := u["cache_creation_input_tokens"].(float64); ok {
+						cacheWrite = int(v)
+					}
+					usage.PromptTokens = inputTokens + cacheRead + cacheWrite
+					usage.CachedTokens = cacheRead
+					usage.CacheWriteTokens = cacheWrite
 				}
 			}
 			// 发送初始 chunk
 			chunk := buildOpenAIChunk(msgID, mdl, 0, map[string]any{"role": "assistant", "content": ""}, nil)
 			writeSSEChunk(c.Writer, chunk)
-			if ok {
+			if hasFlusher {
 				flusher.Flush()
 			}
 			captured.WriteString("data: " + chunk + "\n")
@@ -899,11 +969,13 @@ func convertAnthropicSSEToOpenAI(c *gin.Context, statusCode int, header http.Hea
 				}
 				contentBlockIdx = idx
 				if cbType == "tool_use" {
-					// 开始一个 tool call
+					// 开始一个 tool call，OpenAI tool_calls index 从 0 递增
+					toolCallIdx++
+					blockToToolIdx[idx] = toolCallIdx
 					id, _ := cb["id"].(string)
 					name, _ := cb["name"].(string)
 					tc := map[string]any{
-						"index": idx,
+						"index": toolCallIdx,
 						"id":    id,
 						"type":  "function",
 						"function": map[string]any{
@@ -913,7 +985,7 @@ func convertAnthropicSSEToOpenAI(c *gin.Context, statusCode int, header http.Hea
 					}
 					chunk := buildOpenAIChunk(msgID, mdl, 0, map[string]any{"tool_calls": []any{tc}}, nil)
 					writeSSEChunk(c.Writer, chunk)
-					if ok {
+					if hasFlusher {
 						flusher.Flush()
 					}
 					captured.WriteString("data: " + chunk + "\n")
@@ -928,21 +1000,33 @@ func convertAnthropicSSEToOpenAI(c *gin.Context, statusCode int, header http.Hea
 					text, _ := delta["text"].(string)
 					chunk := buildOpenAIChunk(msgID, mdl, 0, map[string]any{"content": text}, nil)
 					writeSSEChunk(c.Writer, chunk)
-					if ok {
+					if hasFlusher {
 						flusher.Flush()
 					}
 					captured.WriteString("data: " + chunk + "\n")
+				case "thinking_delta":
+					// thinking 内容作为普通文本透传给 OpenAI 客户端
+					text, _ := delta["thinking"].(string)
+					if text != "" {
+						chunk := buildOpenAIChunk(msgID, mdl, 0, map[string]any{"content": text}, nil)
+						writeSSEChunk(c.Writer, chunk)
+						if hasFlusher {
+							flusher.Flush()
+						}
+						captured.WriteString("data: " + chunk + "\n")
+					}
 				case "input_json_delta":
 					partial, _ := delta["partial_json"].(string)
+					tcIdx := blockToToolIdx[contentBlockIdx] // 映射到 OpenAI tool_calls index
 					tc := map[string]any{
-						"index": contentBlockIdx,
+						"index": tcIdx,
 						"function": map[string]any{
 							"arguments": partial,
 						},
 					}
 					chunk := buildOpenAIChunk(msgID, mdl, 0, map[string]any{"tool_calls": []any{tc}}, nil)
 					writeSSEChunk(c.Writer, chunk)
-					if ok {
+					if hasFlusher {
 						flusher.Flush()
 					}
 					captured.WriteString("data: " + chunk + "\n")
@@ -962,19 +1046,44 @@ func convertAnthropicSSEToOpenAI(c *gin.Context, statusCode int, header http.Hea
 					stopReason = convertAnthropicStopReason(sr)
 				}
 			}
-			chunk := buildOpenAIChunkWithFinish(msgID, mdl, 0, stopReason, &usage)
+			// NoCache: 清零缓存详情字段，隐藏缓存信息
+			respUsage := usage
+			if noCache {
+				respUsage.CachedTokens = 0
+				respUsage.CacheWriteTokens = 0
+			}
+			chunk := buildOpenAIChunkWithFinish(msgID, mdl, 0, stopReason, &respUsage)
 			writeSSEChunk(c.Writer, chunk)
-			if ok {
+			if hasFlusher {
 				flusher.Flush()
 			}
 			captured.WriteString("data: " + chunk + "\n")
 
 		case "message_stop":
 			c.Writer.Write([]byte("data: [DONE]\n\n"))
-			if ok {
+			if hasFlusher {
 				flusher.Flush()
 			}
 			captured.WriteString("data: [DONE]\n")
+
+		case "error":
+			// Anthropic 流式错误 → 作为 OpenAI error chunk 转发
+			errMsg := ""
+			if errObj, ok := event["error"].(map[string]any); ok {
+				errMsg, _ = errObj["message"].(string)
+			}
+			errChunk := map[string]any{
+				"error": map[string]any{
+					"message": errMsg,
+					"type":    "server_error",
+				},
+			}
+			errJSON, _ := json.Marshal(errChunk)
+			writeSSEChunk(c.Writer, string(errJSON))
+			if hasFlusher {
+				flusher.Flush()
+			}
+			captured.WriteString("data: " + string(errJSON) + "\n")
 		}
 	}
 
@@ -982,7 +1091,7 @@ func convertAnthropicSSEToOpenAI(c *gin.Context, statusCode int, header http.Hea
 }
 
 // convertOpenAISSEToAnthropic 将 OpenAI SSE 流转换为 Anthropic SSE 流
-func convertOpenAISSEToAnthropic(c *gin.Context, statusCode int, header http.Header, body io.ReadCloser, originalModel string) (Usage, []byte) {
+func convertOpenAISSEToAnthropic(c *gin.Context, statusCode int, header http.Header, body io.ReadCloser, originalModel string, noCache bool) (Usage, []byte) {
 	defer body.Close()
 
 	// 解压
@@ -1020,6 +1129,7 @@ func convertOpenAISSEToAnthropic(c *gin.Context, statusCode int, header http.Hea
 	contentBlockStarted := false
 	var msgID string
 	mdl := originalModel
+	var pendingStopReason string // 缓存 stop_reason，延迟到 [DONE] 时发送 message_delta
 
 	// 收集 tool call 状态
 	type toolCallState struct {
@@ -1037,6 +1147,43 @@ func convertOpenAISSEToAnthropic(c *gin.Context, statusCode int, header http.Hea
 		}
 		data := line[6:]
 		if data == "[DONE]" {
+			// 发送 message_delta（包含 stop_reason 和 accumulated usage）
+			if pendingStopReason != "" {
+				deltaUsage := map[string]any{
+					"output_tokens": usage.OutputTokens,
+				}
+				if usage.InputTokens > 0 || usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0 {
+					deltaUsage["input_tokens"] = usage.InputTokens
+				}
+				if noCache {
+					if usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0 {
+						deltaUsage["input_tokens"] = usage.InputTokens + usage.CacheReadInputTokens
+						if usage.CacheCreationInputTokens > 0 {
+							deltaUsage["output_tokens"] = usage.OutputTokens + usage.CacheCreationInputTokens
+						}
+					}
+				} else {
+					if usage.CacheReadInputTokens > 0 {
+						deltaUsage["cache_read_input_tokens"] = usage.CacheReadInputTokens
+					}
+					if usage.CacheCreationInputTokens > 0 {
+						deltaUsage["cache_creation_input_tokens"] = usage.CacheCreationInputTokens
+					}
+				}
+				msgDelta := map[string]any{
+					"type": "message_delta",
+					"delta": map[string]any{
+						"stop_reason": pendingStopReason,
+					},
+					"usage": deltaUsage,
+				}
+				mdJSON, _ := json.Marshal(msgDelta)
+				writeAnthropicSSE(c.Writer, "message_delta", string(mdJSON))
+				if hasFlusher {
+					flusher.Flush()
+				}
+				captured.WriteString("event: message_delta\ndata: " + string(mdJSON) + "\n\n")
+			}
 			// 发送 message_stop
 			writeAnthropicSSE(c.Writer, "message_stop", `{}`)
 			if hasFlusher {
@@ -1062,6 +1209,8 @@ func convertOpenAISSEToAnthropic(c *gin.Context, statusCode int, header http.Hea
 
 		choices, _ := chunk["choices"].([]any)
 		if len(choices) == 0 {
+			// usage-only chunk（OpenAI stream_options 返回的独立 usage chunk）
+			extractOpenAIChunkUsage(chunk, &usage)
 			continue
 		}
 		choice, _ := choices[0].(map[string]any)
@@ -1176,8 +1325,22 @@ func convertOpenAISSEToAnthropic(c *gin.Context, statusCode int, header http.Hea
 						}
 					}
 
-					// 第一次看到这个 tool call，发送 content_block_start
+					// 第一次看到这个 tool call，先关闭前一个 tool block，再发送 content_block_start
 					if currentToolIdx < idx {
+						// 关闭前一个 tool block（如果有）
+						if currentToolIdx >= 0 {
+							prevAnthropicIdx := currentToolIdx + 1
+							if !contentBlockStarted {
+								prevAnthropicIdx = currentToolIdx
+							}
+							blockStop := map[string]any{"type": "content_block_stop", "index": prevAnthropicIdx}
+							bsJSON, _ := json.Marshal(blockStop)
+							writeAnthropicSSE(c.Writer, "content_block_stop", string(bsJSON))
+							if hasFlusher {
+								flusher.Flush()
+							}
+							captured.WriteString("event: content_block_stop\ndata: " + string(bsJSON) + "\n\n")
+						}
 						anthropicIdx := idx + 1 // 文本 block 占了 index 0
 						if !contentBlockStarted {
 							anthropicIdx = idx
@@ -1228,7 +1391,7 @@ func convertOpenAISSEToAnthropic(c *gin.Context, statusCode int, header http.Hea
 			}
 		}
 
-		// finish_reason → message_delta
+		// finish_reason → 关闭 content blocks，缓存 stop_reason（message_delta 延迟到 [DONE] 时发送）
 		if finishReason != "" {
 			// 先关闭当前 content block
 			if contentBlockStarted || currentToolIdx >= 0 {
@@ -1248,31 +1411,10 @@ func convertOpenAISSEToAnthropic(c *gin.Context, statusCode int, header http.Hea
 				captured.WriteString("event: content_block_stop\ndata: " + string(bsJSON) + "\n\n")
 			}
 
-			// 提取 usage (如果在最后一个 chunk 里)
-			if u, ok := chunk["usage"].(map[string]any); ok {
-				if v, ok := u["prompt_tokens"].(float64); ok {
-					usage.InputTokens = int(v)
-				}
-				if v, ok := u["completion_tokens"].(float64); ok {
-					usage.OutputTokens = int(v)
-				}
-			}
+			// 提取 usage（如果和 finish_reason 在同一个 chunk 里）
+			extractOpenAIChunkUsage(chunk, &usage)
 
-			msgDelta := map[string]any{
-				"type": "message_delta",
-				"delta": map[string]any{
-					"stop_reason": convertOpenAIFinishReason(finishReason),
-				},
-				"usage": map[string]any{
-					"output_tokens": usage.OutputTokens,
-				},
-			}
-			mdJSON, _ := json.Marshal(msgDelta)
-			writeAnthropicSSE(c.Writer, "message_delta", string(mdJSON))
-			if hasFlusher {
-				flusher.Flush()
-			}
-			captured.WriteString("event: message_delta\ndata: " + string(mdJSON) + "\n\n")
+			pendingStopReason = convertOpenAIFinishReason(finishReason)
 		}
 	}
 
@@ -1339,6 +1481,7 @@ func buildOpenAIChunk(id string, mdl string, index int, delta map[string]any, us
 	chunk := map[string]any{
 		"id":      "chatcmpl-" + id,
 		"object":  "chat.completion.chunk",
+		"created": time.Now().Unix(),
 		"model":   mdl,
 		"choices": []any{map[string]any{"index": index, "delta": delta, "finish_reason": nil}},
 	}
@@ -1358,15 +1501,23 @@ func buildOpenAIChunkWithFinish(id string, mdl string, index int, finishReason s
 	chunk := map[string]any{
 		"id":      "chatcmpl-" + id,
 		"object":  "chat.completion.chunk",
+		"created": time.Now().Unix(),
 		"model":   mdl,
 		"choices": []any{map[string]any{"index": index, "delta": map[string]any{}, "finish_reason": finishReason}},
 	}
 	if usage != nil {
-		chunk["usage"] = map[string]any{
+		usageMap := map[string]any{
 			"prompt_tokens":     usage.PromptTokens,
 			"completion_tokens": usage.CompletionTokens,
 			"total_tokens":      usage.TotalTokens,
 		}
+		if usage.CachedTokens > 0 || usage.CacheWriteTokens > 0 {
+			usageMap["prompt_tokens_details"] = map[string]any{
+				"cached_tokens":      usage.CachedTokens,
+				"cache_write_tokens": usage.CacheWriteTokens,
+			}
+		}
+		chunk["usage"] = usageMap
 	}
 	out, _ := json.Marshal(chunk)
 	return string(out)
@@ -1378,6 +1529,35 @@ func writeSSEChunk(w io.Writer, chunk string) {
 
 func writeAnthropicSSE(w io.Writer, eventType string, data string) {
 	w.Write([]byte("event: " + eventType + "\ndata: " + data + "\n\n"))
+}
+
+// extractOpenAIChunkUsage 从 OpenAI SSE chunk 中提取 usage（适用于 Anthropic 格式的 Usage）
+// OpenAI prompt_tokens 含缓存，需拆分；支持 OpenRouter 的 cache_write_tokens
+func extractOpenAIChunkUsage(chunk map[string]any, usage *Usage) {
+	u, ok := chunk["usage"].(map[string]any)
+	if !ok {
+		return
+	}
+	promptTokens := 0
+	cachedTokens := 0
+	cacheWriteTokens := 0
+	if v, ok := u["prompt_tokens"].(float64); ok {
+		promptTokens = int(v)
+	}
+	if v, ok := u["completion_tokens"].(float64); ok {
+		usage.OutputTokens = int(v)
+	}
+	if details, ok := u["prompt_tokens_details"].(map[string]any); ok {
+		if v, ok := details["cached_tokens"].(float64); ok {
+			cachedTokens = int(v)
+		}
+		if v, ok := details["cache_write_tokens"].(float64); ok {
+			cacheWriteTokens = int(v)
+		}
+	}
+	usage.InputTokens = promptTokens - cachedTokens - cacheWriteTokens
+	usage.CacheReadInputTokens = cachedTokens
+	usage.CacheCreationInputTokens = cacheWriteTokens
 }
 
 // ============================

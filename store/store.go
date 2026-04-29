@@ -73,6 +73,11 @@ func New(path string) (*Store, error) {
 			}}
 			dirty = true
 		}
+		if s.cfg.Groups[i].RegistryKey == "" {
+			// 自动补充注册 key，用渠道名称
+			s.cfg.Groups[i].RegistryKey = s.cfg.Groups[i].Name
+			dirty = true
+		}
 	}
 	if dirty {
 		s.save()

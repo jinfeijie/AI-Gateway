@@ -40,15 +40,19 @@ func registerHealthCheckRoutes(r *gin.RouterGroup, s *store.Store, checker *heal
 	r.GET("/probe-models", func(c *gin.Context) {
 		cfg := s.Get()
 		c.JSON(http.StatusOK, gin.H{"data": gin.H{
-			"models":        cfg.ProbeModels,
-			"default_model": cfg.DefaultProbeModel,
+			"models":              cfg.ProbeModels,
+			"default_model":      cfg.DefaultProbeModel,
+			"openai_models":       cfg.OpenAIProbeModels,
+			"default_openai_model": cfg.DefaultOpenAIProbeModel,
 		}})
 	})
 
 	r.PUT("/probe-models", func(c *gin.Context) {
 		var req struct {
-			Models       []string `json:"models"`
-			DefaultModel string   `json:"default_model"`
+			Models             []string `json:"models"`
+			DefaultModel       string   `json:"default_model"`
+			OpenAIModels       []string `json:"openai_models"`
+			DefaultOpenAIModel string   `json:"default_openai_model"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -57,6 +61,8 @@ func registerHealthCheckRoutes(r *gin.RouterGroup, s *store.Store, checker *heal
 		if err := s.Update(func(cfg *model.Config) {
 			cfg.ProbeModels = req.Models
 			cfg.DefaultProbeModel = req.DefaultModel
+			cfg.OpenAIProbeModels = req.OpenAIModels
+			cfg.DefaultOpenAIProbeModel = req.DefaultOpenAIModel
 		}); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -84,7 +90,7 @@ func registerHealthCheckRoutes(r *gin.RouterGroup, s *store.Store, checker *heal
 			c.JSON(http.StatusNotFound, gin.H{"error": "upstream not found"})
 			return
 		}
-		result := checker.Probe(upstream.API, upstream.APIKey, req.Model, cfg.HealthCheck)
+		result := checker.Probe(upstream.API, upstream.APIKey, req.Model, upstream.Protocol, cfg.HealthCheck)
 		c.JSON(http.StatusOK, gin.H{"data": gin.H{
 			"id":          id,
 			"healthy":     result.Healthy,

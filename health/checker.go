@@ -269,8 +269,13 @@ func (ch *Checker) checkAll() {
 		}
 		ch.client.Timeout = timeout
 
+		probeModel := cfg.DefaultProbeModel
+		if u.Protocol == "openai" && cfg.DefaultOpenAIProbeModel != "" {
+			probeModel = cfg.DefaultOpenAIProbeModel
+		}
+
 		probeStart := time.Now()
-		result := ch.Probe(u.API, u.APIKey, cfg.DefaultProbeModel, hc)
+		result := ch.Probe(u.API, u.APIKey, probeModel, u.Protocol, hc)
 		durationMs := time.Since(probeStart).Milliseconds()
 
 		// 写请求日志
@@ -402,14 +407,14 @@ func (ch *Checker) applyChanges(changes []statusChange) {
 }
 
 // Probe 发送真实请求探活，返回详细结果。probeModel 为空则使用默认模型。
-func (ch *Checker) Probe(api string, apiKey string, probeModel string, hc model.HealthCheckConfig) ProbeResult {
+func (ch *Checker) Probe(api string, apiKey string, probeModel string, protocol string, hc model.HealthCheckConfig) ProbeResult {
 	retries := hc.Retries
 	if retries <= 0 {
 		retries = 1
 	}
 	var last ProbeResult
 	for i := 0; i < retries; i++ {
-		last = ch.doProbe(api, apiKey, probeModel, hc)
+		last = ch.doProbe(api, apiKey, probeModel, protocol, hc)
 		if last.Healthy {
 			return last
 		}
@@ -417,31 +422,52 @@ func (ch *Checker) Probe(api string, apiKey string, probeModel string, hc model.
 	return last
 }
 
-func (ch *Checker) doProbe(api string, apiKey string, probeModel string, hc model.HealthCheckConfig) ProbeResult {
+func (ch *Checker) doProbe(api string, apiKey string, probeModel string, protocol string, hc model.HealthCheckConfig) ProbeResult {
 	base := strings.TrimRight(api, "/")
-	url := base + "/v1/messages"
-	if strings.HasSuffix(base, "/v1/messages") {
-		url = base
-	}
 
-	if probeModel == "" {
-		probeModel = "claude-sonnet-4-6"
-	}
-
+	var url string
 	var reqBody string
-	if hc.Body != "" {
-		reqBody = hc.Body
+
+	if protocol == "openai" {
+		url = base + "/v1/chat/completions"
+		if strings.HasSuffix(base, "/v1/chat/completions") {
+			url = base
+		}
+		if probeModel == "" {
+			probeModel = "gpt-4o-mini"
+		}
+		if hc.Body != "" {
+			reqBody = hc.Body
+		} else {
+			reqBody = fmt.Sprintf(`{"model":"%s","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`, probeModel)
+		}
 	} else {
-		reqBody = fmt.Sprintf(`{"model":"%s","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`, probeModel)
+		url = base + "/v1/messages"
+		if strings.HasSuffix(base, "/v1/messages") {
+			url = base
+		}
+		if probeModel == "" {
+			probeModel = "claude-sonnet-4-6"
+		}
+		if hc.Body != "" {
+			reqBody = hc.Body
+		} else {
+			reqBody = fmt.Sprintf(`{"model":"%s","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`, probeModel)
+		}
 	}
+
 	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(reqBody))
 	if err != nil {
 		return ProbeResult{Error: err.Error()}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Api-Key", apiKey)
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Anthropic-Version", "2023-06-01")
+	if protocol == "openai" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	} else {
+		req.Header.Set("X-Api-Key", apiKey)
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("Anthropic-Version", "2023-06-01")
+	}
 	for k, v := range hc.Headers {
 		req.Header.Set(k, v)
 	}
@@ -451,8 +477,8 @@ func (ch *Checker) doProbe(api string, apiKey string, probeModel string, hc mode
 	}
 	defer resp.Body.Close()
 
-	// 读取响应体（截断到 4KB）
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	// 读取响应体
+	respBody, _ := io.ReadAll(resp.Body)
 	respStr := string(respBody)
 
 	// 提取 AI 回复文本

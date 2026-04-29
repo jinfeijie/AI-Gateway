@@ -51,6 +51,7 @@ type RequestLog struct {
 	OutputTokens     int `json:"output_tokens,omitempty"`
 	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens  int `json:"reasoning_tokens,omitempty"`
 	Stream bool `json:"stream,omitempty"` // 是否流式请求
 	// 失败时记录请求体和响应体
 	RequestBody  string `json:"request_body,omitempty"`
@@ -1098,6 +1099,11 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			sendBody = body
 		}
 
+		// 不支持 fast 模式时，剔除请求体中的 speed 字段
+		if !upstream.SupportFast {
+			sendBody = stripFastMode(sendBody)
+		}
+
 		var resp *http.Response
 		if crossProtocol {
 			resp, err = h.doRequestWithProtocol(c, upstream, sendBody, "openai")
@@ -1233,7 +1239,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			statusCode, respBody := h.applyOpenAIErrorMapping(mappings, statusCode, resp)
 			if reqStream && isSSE(resp.Header) {
 				// 流式：OpenAI SSE → Anthropic SSE
-				usage, respBodyBytes = convertOpenAISSEToAnthropic(c, statusCode, resp.Header, respBody, originalModel)
+				usage, respBodyBytes = convertOpenAISSEToAnthropic(c, statusCode, resp.Header, respBody, originalModel, group.NoCache)
 			} else {
 				// 非流式：读取 OpenAI 响应，转换为 Anthropic 格式
 				defer respBody.Close()
@@ -1358,6 +1364,11 @@ func (h *Handler) doRequest(c *gin.Context, upstream *model.Upstream, body []byt
 	req.Header.Set("Authorization", "Bearer "+upstream.APIKey)
 	// 确保 Content-Type 为 JSON
 	req.Header.Set("Content-Type", "application/json")
+
+	// 不支持 fast 模式时，从 anthropic-beta header 中移除 fast-mode
+	if !upstream.SupportFast {
+		stripFastModeBeta(req)
+	}
 
 	return h.client.Do(req)
 }
@@ -1928,5 +1939,43 @@ func injectPath(node any, parts []string, value any) {
 				injectPath(v[idx], rest, value)
 			}
 		}
+	}
+}
+
+// stripFastMode 从 JSON 请求体中移除 speed 字段
+func stripFastMode(body []byte) []byte {
+	var obj map[string]any
+	if json.Unmarshal(body, &obj) != nil {
+		return body
+	}
+	if _, ok := obj["speed"]; !ok {
+		return body
+	}
+	delete(obj, "speed")
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+// stripFastModeBeta 从 anthropic-beta header 中移除 fast-mode 相关的 beta 标识
+func stripFastModeBeta(req *http.Request) {
+	beta := req.Header.Get("Anthropic-Beta")
+	if beta == "" {
+		return
+	}
+	parts := strings.Split(beta, ",")
+	var kept []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" && !strings.HasPrefix(p, "fast-mode") {
+			kept = append(kept, p)
+		}
+	}
+	if len(kept) == 0 {
+		req.Header.Del("Anthropic-Beta")
+	} else {
+		req.Header.Set("Anthropic-Beta", strings.Join(kept, ","))
 	}
 }

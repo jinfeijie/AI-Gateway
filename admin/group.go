@@ -18,6 +18,7 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 	r.POST("/groups", func(c *gin.Context) {
 		var req struct {
 			Name           string                  `json:"name" binding:"required"`
+			RegistryKey    string                  `json:"registry_key"`
 			Protocols      []string                `json:"protocols"`
 			Models         []string                `json:"models"`
 			ModelMapping   map[string]string       `json:"model_mapping"`
@@ -33,9 +34,21 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		regKey := req.RegistryKey
+		if regKey == "" {
+			regKey = req.Name
+		}
+		// 唯一性校验
+		for _, g := range s.Get().Groups {
+			if g.RegistryKey == regKey {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "注册 Key '" + regKey + "' 已存在"})
+				return
+			}
+		}
 		g := model.Group{
 			ID:   uuid.New().String(),
 			Name: req.Name,
+			RegistryKey: regKey,
 			APIKeys: []model.GroupAPIKey{{
 				ID:     uuid.New().String(),
 				Key:    "sk-" + uuid.New().String(),
@@ -69,6 +82,7 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 		id := c.Param("id")
 		var req struct {
 			Name                  string                  `json:"name" binding:"required"`
+			RegistryKey           *string                 `json:"registry_key"`
 			Protocols             []string                `json:"protocols"`
 			Models                []string                `json:"models"`
 			ModelMapping          map[string]string       `json:"model_mapping"`
@@ -87,11 +101,23 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		// 注册 Key 唯一性校验
+		if req.RegistryKey != nil && *req.RegistryKey != "" {
+			for _, g := range s.Get().Groups {
+				if g.ID != id && g.RegistryKey == *req.RegistryKey {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "注册 Key '" + *req.RegistryKey + "' 已被其他渠道使用"})
+					return
+				}
+			}
+		}
 		var found bool
 		if err := s.Update(func(cfg *model.Config) {
 			for i := range cfg.Groups {
 				if cfg.Groups[i].ID == id {
 					cfg.Groups[i].Name = req.Name
+					if req.RegistryKey != nil {
+						cfg.Groups[i].RegistryKey = *req.RegistryKey
+					}
 					if req.Protocols != nil {
 						cfg.Groups[i].Protocols = req.Protocols
 					}

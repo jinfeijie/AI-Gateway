@@ -33,6 +33,9 @@ type OpenAIUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	CachedTokens     int `json:"-"` // 从 prompt_tokens_details.cached_tokens 提取
+	ReasoningTokens  int `json:"-"` // 从 completion_tokens_details.reasoning_tokens 提取
+	CacheWriteTokens int `json:"-"` // 跨协议时从 Anthropic cache_creation_input_tokens 提取
 }
 
 func (h *Handler) proxyOpenAI(c *gin.Context) {
@@ -349,7 +352,7 @@ func (h *Handler) proxyOpenAI(c *gin.Context) {
 			statusCode, respBody := h.applyErrorMapping(mappings, statusCode, resp)
 			if reqStream && isSSE(resp.Header) {
 				// 流式：Anthropic SSE → OpenAI SSE
-				usage, respBodyBytes = convertAnthropicSSEToOpenAI(c, statusCode, resp.Header, respBody, originalModel)
+				usage, respBodyBytes = convertAnthropicSSEToOpenAI(c, statusCode, resp.Header, respBody, originalModel, group.NoCache)
 			} else {
 				// 非流式：读取 Anthropic 响应，转换为 OpenAI 格式
 				defer respBody.Close()
@@ -400,7 +403,9 @@ func (h *Handler) proxyOpenAI(c *gin.Context) {
 			UpstreamID: upstream.ID, Remark: upstream.Remark,
 			Status: statusCode, Duration: time.Since(startTime).Milliseconds(), TTFBMs: ttfb,
 			Action: "success", RetryCount: attempt, Stream: reqStream,
-			InputTokens: usage.PromptTokens, OutputTokens: usage.CompletionTokens,
+			InputTokens: usage.PromptTokens - usage.CachedTokens - usage.CacheWriteTokens, OutputTokens: usage.CompletionTokens,
+			CacheReadTokens: usage.CachedTokens, CacheWriteTokens: usage.CacheWriteTokens,
+			ReasoningTokens: usage.ReasoningTokens,
 			RequestBody: string(body), ResponseBody: string(respBodyBytes),
 		}
 		if statusCode >= 400 {

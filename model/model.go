@@ -18,6 +18,7 @@ type Upstream struct {
 	Source         string   `json:"source,omitempty"`          // "manual"（默认）或 "registry"
 	HeartbeatAt    *int64   `json:"heartbeat_at,omitempty"`    // 最后心跳时间戳（仅 registry）
 	NoOverride     bool     `json:"no_override,omitempty"`     // 禁止注册 API 覆盖
+	SupportFast    bool     `json:"support_fast,omitempty"`    // 是否支持 fast 模式，默认 false
 }
 
 // EffectiveWeight 返回实际生效的权重值，nil 视为 1
@@ -56,6 +57,7 @@ type GroupAPIKey struct {
 type Group struct {
 	ID             string             `json:"id"`
 	Name           string             `json:"name"`
+	RegistryKey    string             `json:"registry_key,omitempty"` // 渠道注册 key，服务注册时用此字段匹配，不随名称变化
 	APIKey         string             `json:"api_key,omitempty"`  // 已废弃，迁移用
 	APIKeys        []GroupAPIKey      `json:"api_keys,omitempty"` // 多 Key 支持
 	Protocols      []string           `json:"protocols,omitempty"` // 支持的协议: anthropic, openai, openai-response
@@ -120,8 +122,10 @@ type Config struct {
 	ErrorMappings     []ErrorMapping    `json:"error_mappings"`
 	StripFields       []string          `json:"strip_fields,omitempty"`
 	InjectFields      []InjectField     `json:"inject_fields,omitempty"`
-	ProbeModels       []string          `json:"probe_models,omitempty"`
-	DefaultProbeModel string            `json:"default_probe_model,omitempty"`
+	ProbeModels            []string          `json:"probe_models,omitempty"`
+	DefaultProbeModel      string            `json:"default_probe_model,omitempty"`
+	OpenAIProbeModels      []string          `json:"openai_probe_models,omitempty"`
+	DefaultOpenAIProbeModel string           `json:"default_openai_probe_model,omitempty"`
 	ModelPricing      []ModelPricing    `json:"model_pricing,omitempty"`
 	RegistryToken     string            `json:"registry_token,omitempty"` // 注册 API 鉴权 token（空=不鉴权）
 	HeartbeatTTL      int               `json:"heartbeat_ttl,omitempty"`  // 心跳超时秒数，默认 30
@@ -148,6 +152,13 @@ func DefaultConfig() Config {
 			"claude-haiku-4-5-20251001",
 			"claude-opus-4-6",
 			"claude-sonnet-4-20250514",
+		},
+		DefaultOpenAIProbeModel: "gpt-4o-mini",
+		OpenAIProbeModels: []string{
+			"gpt-4o-mini",
+			"gpt-4o",
+			"gpt-4.1-mini",
+			"gpt-4.1-nano",
 		},
 		ModelPricing: DefaultModelPricing(),
 	}

@@ -61,19 +61,28 @@ func registerHandler(s *store.Store) gin.HandlerFunc {
 		var instanceID string
 
 		if err := s.Update(func(cfg *model.Config) {
-			// 查找或创建分组
+			// 查找分组：优先按 registry_key 匹配，其次按名称
 			groupID := ""
 			for _, g := range cfg.Groups {
-				if g.Name == req.Group {
+				if g.RegistryKey != "" && g.RegistryKey == req.Group {
 					groupID = g.ID
 					break
 				}
 			}
 			if groupID == "" {
+				for _, g := range cfg.Groups {
+					if g.Name == req.Group {
+						groupID = g.ID
+						break
+					}
+				}
+			}
+			if groupID == "" {
 				groupID = uuid.New().String()
 				cfg.Groups = append(cfg.Groups, model.Group{
-					ID:   groupID,
-					Name: req.Group,
+					ID:          groupID,
+					Name:        req.Group,
+					RegistryKey: req.Group,
 				})
 			}
 
