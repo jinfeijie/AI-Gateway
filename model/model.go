@@ -68,6 +68,8 @@ type Group struct {
 	ErrorMappings  []ErrorMapping     `json:"error_mappings,omitempty"` // 分组级错误码映射，优先于全局
 	StripFields    []string           `json:"strip_fields,omitempty"`   // 分组级字段剔除，优先于全局
 	InjectFields   []InjectField      `json:"inject_fields,omitempty"`  // 分组级字段注入，优先于全局
+	StripHeaders   []string           `json:"strip_headers,omitempty"`  // 分组级请求头剔除，优先于全局
+	InjectHeaders  map[string]string  `json:"inject_headers,omitempty"` // 分组级请求头注入，优先于全局
 	LogMode        string             `json:"log_mode,omitempty"`        // off / random / random_session / all（默认 all）
 	LogSampleRate  int                `json:"log_sample_rate,omitempty"` // 采样率百分比 1-100，默认 10
 	AllowStream    *bool              `json:"allow_stream,omitempty"`    // 允许流式请求，默认 true
@@ -76,6 +78,7 @@ type Group struct {
 	NoCache        bool               `json:"no_cache,omitempty"`        // 无缓存模式：缓存读计入输入、缓存写计入输出，清零缓存字段
 	SignatureEnabled      bool        `json:"signature_enabled,omitempty"`      // 是否启用签名替换
 	SignatureReplacements []string    `json:"signature_replacements,omitempty"` // 思考签名替换列表，随机选一个替换响应中的 signature
+	SimulateCC            bool        `json:"simulate_cc,omitempty"`            // 模拟 Claude Code 客户端特征，自动注入 metadata/system/anthropic-beta
 }
 
 // HealthCheckConfig 健康检查配置
@@ -122,6 +125,8 @@ type Config struct {
 	ErrorMappings     []ErrorMapping    `json:"error_mappings"`
 	StripFields       []string          `json:"strip_fields,omitempty"`
 	InjectFields      []InjectField     `json:"inject_fields,omitempty"`
+	StripHeaders      []string          `json:"strip_headers,omitempty"`      // 全局请求头剔除
+	InjectHeaders     map[string]string `json:"inject_headers,omitempty"`     // 全局请求头注入
 	ProbeModels            []string          `json:"probe_models,omitempty"`
 	DefaultProbeModel      string            `json:"default_probe_model,omitempty"`
 	OpenAIProbeModels      []string          `json:"openai_probe_models,omitempty"`

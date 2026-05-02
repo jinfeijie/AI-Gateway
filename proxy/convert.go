@@ -1608,6 +1608,23 @@ func (h *Handler) doRequestWithProtocol(c *gin.Context, upstream *model.Upstream
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	// 应用 header 剔除/注入规则
+	if strip, ok := c.Get("_strip_headers"); ok {
+		if inject, ok2 := c.Get("_inject_headers"); ok2 {
+			applyHeaderRules(req, strip.([]string), inject.(map[string]string))
+		}
+	}
+
+	// 模拟 Claude Code 客户端：注入 anthropic-beta header（仅 anthropic 协议）
+	if protocol == "anthropic" {
+		if _, ok := c.Get("_simulate_cc"); ok {
+			injectCCHeaders(req)
+		}
+	}
+
+	// 保存实际转发的请求头供日志使用
+	saveForwardedHeaders(c, req)
+
 	return h.client.Do(req)
 }
 

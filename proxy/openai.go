@@ -113,11 +113,13 @@ func (h *Handler) proxyOpenAI(c *gin.Context) {
 
 	// 模型映射
 	var originalModel string
+	bodyModified := false
 	if len(group.ModelMapping) > 0 && reqModel != "" {
 		if mapped, ok := group.ModelMapping[reqModel]; ok {
 			originalModel = reqModel
 			parsed["model"] = mapped
 			reqModel = mapped
+			bodyModified = true
 		}
 	}
 
@@ -146,6 +148,7 @@ func (h *Handler) proxyOpenAI(c *gin.Context) {
 			parts := strings.Split(path, ".")
 			stripPath(parsed, parts)
 		}
+		bodyModified = true
 	}
 
 	// 字段注入（分组优先，全局兜底）
@@ -158,13 +161,16 @@ func (h *Handler) proxyOpenAI(c *gin.Context) {
 			parts := strings.Split(f.Path, ".")
 			injectPath(parsed, parts, f.Value)
 		}
+		bodyModified = true
 	}
 
-	// 重新序列化
-	body, err = json.Marshal(parsed)
-	if err != nil {
-		openaiError(c, http.StatusBadRequest, "invalid_request_error", "failed to marshal request body")
-		return
+	// 仅在 body 被修改时重新序列化，否则保留原始字节
+	if bodyModified {
+		body, err = orderedMarshal(parsed)
+		if err != nil {
+			openaiError(c, http.StatusBadRequest, "invalid_request_error", "failed to marshal request body")
+			return
+		}
 	}
 
 	// 会话亲和：OpenAI 从顶层 user 字段提取
@@ -174,6 +180,35 @@ func (h *Handler) proxyOpenAI(c *gin.Context) {
 	logErrorOnly := group.LogMode == "error_only"
 	requestID := c.GetHeader("X-Request-Log-Id")
 
+	// Header 剔除/注入规则（分组优先，全局兜底），存入 context 供 doOpenAIRequest 使用
+	stripHeadersCfg := group.StripHeaders
+	if len(stripHeadersCfg) == 0 {
+		stripHeadersCfg = cfg.StripHeaders
+	}
+	injectHeadersCfg := group.InjectHeaders
+	if len(injectHeadersCfg) == 0 {
+		injectHeadersCfg = cfg.InjectHeaders
+	}
+
+	// 模拟 Claude Code 客户端特征：注入 anthropic-beta header（跨协议到 anthropic 时需要）
+	if group.SimulateCC {
+		c.Set("_simulate_cc", true)
+	}
+
+	if len(stripHeadersCfg) > 0 || len(injectHeadersCfg) > 0 {
+		if stripHeadersCfg == nil {
+			stripHeadersCfg = []string{}
+		}
+		if injectHeadersCfg == nil {
+			injectHeadersCfg = map[string]string{}
+		}
+		c.Set("_strip_headers", stripHeadersCfg)
+		c.Set("_inject_headers", injectHeadersCfg)
+	}
+
+	// 提取请求头用于日志记录（应用相同的剔除规则）
+	reqHeaders := extractRequestHeadersWithRules(c, stripHeadersCfg, injectHeadersCfg)
+
 	maxRetries := h.balancer.ActiveCount(cfg, group.ID)
 	if maxRetries == 0 {
 		if logEnabled {
@@ -182,7 +217,7 @@ func (h *Handler) proxyOpenAI(c *gin.Context) {
 				SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
 				Status: 502, Duration: time.Since(startTime).Milliseconds(),
 				Action: "error", Detail: "no active upstream",
-				Stream: reqStream, RequestBody: string(body),
+				Stream: reqStream, RequestHeaders: reqHeaders, RequestBody: string(body),
 			})
 		}
 		openaiError(c, http.StatusBadGateway, "server_error", "no active upstream")
@@ -217,6 +252,10 @@ func (h *Handler) proxyOpenAI(c *gin.Context) {
 		var sendBody []byte
 		if crossProtocol {
 			converted := convertOpenAIRequestToAnthropic(parsed)
+			// 跨协议转发到 Anthropic 上游时，注入 CC 特征
+			if group.SimulateCC {
+				injectCCBody(converted)
+			}
 			var marshalErr error
 			sendBody, marshalErr = json.Marshal(converted)
 			if marshalErr != nil {
@@ -234,6 +273,10 @@ func (h *Handler) proxyOpenAI(c *gin.Context) {
 		} else {
 			resp, err = h.doOpenAIRequest(c, upstream, sendBody)
 		}
+		// 使用实际转发给上游的请求头（含 CC 模拟注入等）
+		if fh, ok := c.Get("_forwarded_headers"); ok {
+			reqHeaders = fh.(map[string]string)
+		}
 		ttfb := time.Since(attemptStart).Milliseconds()
 		h.balancer.DecLoad(upstream.ID)
 
@@ -246,7 +289,7 @@ func (h *Handler) proxyOpenAI(c *gin.Context) {
 					UpstreamID: upstream.ID, Remark: upstream.Remark,
 					Status: 0, Duration: time.Since(startTime).Milliseconds(),
 					Action: "failover", Detail: fmt.Sprintf("连接错误: %v", err), RetryCount: attempt,
-					Stream: reqStream, RequestBody: string(body),
+					Stream: reqStream, RequestHeaders: reqHeaders, RequestBody: string(body),
 				})
 			}
 			if c.Request.Context().Err() != nil {
@@ -290,7 +333,7 @@ func (h *Handler) proxyOpenAI(c *gin.Context) {
 							UpstreamID: upstream.ID, Remark: upstream.Remark,
 							Status: statusCode, Duration: time.Since(startTime).Milliseconds(),
 							Action: "error", Detail: detail, RetryCount: attempt,
-							Stream: reqStream, RequestBody: string(body), ResponseBody: errBodyStr,
+							Stream: reqStream, RequestHeaders: reqHeaders, RequestBody: string(body), ResponseBody: errBodyStr,
 						})
 					}
 					resp.Body.Close()
@@ -331,7 +374,7 @@ func (h *Handler) proxyOpenAI(c *gin.Context) {
 					UpstreamID: upstream.ID, Remark: upstream.Remark,
 					Status: statusCode, Duration: time.Since(startTime).Milliseconds(),
 					Action: "failover", Detail: detail, RetryCount: attempt,
-					Stream: reqStream, RequestBody: string(body), ResponseBody: errBodyStr,
+					Stream: reqStream, RequestHeaders: reqHeaders, RequestBody: string(body), ResponseBody: errBodyStr,
 				})
 			}
 			resp.Body.Close()
@@ -406,6 +449,7 @@ func (h *Handler) proxyOpenAI(c *gin.Context) {
 			InputTokens: usage.PromptTokens - usage.CachedTokens - usage.CacheWriteTokens, OutputTokens: usage.CompletionTokens,
 			CacheReadTokens: usage.CachedTokens, CacheWriteTokens: usage.CacheWriteTokens,
 			ReasoningTokens: usage.ReasoningTokens,
+			RequestHeaders: reqHeaders,
 			RequestBody: string(body), ResponseBody: string(respBodyBytes),
 		}
 		if statusCode >= 400 {
@@ -436,7 +480,7 @@ func (h *Handler) proxyOpenAI(c *gin.Context) {
 			SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
 			Status: 502, Duration: time.Since(startTime).Milliseconds(),
 			Action: "error", Detail: "all upstreams failed",
-			Stream: reqStream, RequestBody: string(body),
+			Stream: reqStream, RequestHeaders: reqHeaders, RequestBody: string(body),
 		})
 	}
 	openaiError(c, http.StatusBadGateway, "server_error", "all upstreams failed")
@@ -467,6 +511,16 @@ func (h *Handler) doOpenAIRequest(c *gin.Context, upstream *model.Upstream, body
 	req.Header.Set("Authorization", "Bearer "+upstream.APIKey)
 	req.Header.Del("X-Api-Key")
 	req.Header.Set("Content-Type", "application/json")
+
+	// 应用 header 剔除/注入规则
+	if strip, ok := c.Get("_strip_headers"); ok {
+		if inject, ok2 := c.Get("_inject_headers"); ok2 {
+			applyHeaderRules(req, strip.([]string), inject.(map[string]string))
+		}
+	}
+
+	// 保存实际转发的请求头供日志使用
+	saveForwardedHeaders(c, req)
 
 	return h.client.Do(req)
 }

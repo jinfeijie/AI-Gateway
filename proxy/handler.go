@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -53,6 +55,8 @@ type RequestLog struct {
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 	ReasoningTokens  int `json:"reasoning_tokens,omitempty"`
 	Stream bool `json:"stream,omitempty"` // 是否流式请求
+	// 请求头信息
+	RequestHeaders map[string]string `json:"request_headers,omitempty"`
 	// 失败时记录请求体和响应体
 	RequestBody  string `json:"request_body,omitempty"`
 	ResponseBody string `json:"response_body,omitempty"`
@@ -222,6 +226,7 @@ func (h *Handler) RequestLogs(groupID string) []any {
 		entry := src[i]
 		entry.RequestBody = ""
 		entry.ResponseBody = ""
+		entry.RequestHeaders = nil
 		result = append(result, entry)
 	}
 	return result
@@ -979,11 +984,13 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 
 	// 模型映射：替换请求中的模型
 	var originalModel string
+	bodyModified := false
 	if len(group.ModelMapping) > 0 && reqModel != "" {
 		if mapped, ok := group.ModelMapping[reqModel]; ok {
 			originalModel = reqModel
 			parsed["model"] = mapped
 			reqModel = mapped
+			bodyModified = true
 		}
 	}
 
@@ -1012,6 +1019,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			parts := strings.Split(path, ".")
 			stripPath(parsed, parts)
 		}
+		bodyModified = true
 	}
 
 	// 字段注入（分组优先，全局兜底）
@@ -1024,13 +1032,21 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			parts := strings.Split(f.Path, ".")
 			injectPath(parsed, parts, f.Value)
 		}
+		bodyModified = true
 	}
 
-	// 单次序列化：模型替换和字段剔除后重新生成 body
-	body, err = json.Marshal(parsed)
-	if err != nil {
-		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "failed to marshal request body")
-		return
+	// 模拟 Claude Code 客户端特征：注入 metadata.user_id、system 标识
+	if group.SimulateCC {
+		bodyModified = injectCCBody(parsed) || bodyModified
+	}
+
+	// 仅在 body 被修改时重新序列化，否则保留原始字节
+	if bodyModified {
+		body, err = orderedMarshal(parsed)
+		if err != nil {
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "failed to marshal request body")
+			return
+		}
 	}
 
 	// 会话亲和 session key: 仅从 metadata.user_id 提取，无 user_id 时不做亲和
@@ -1043,6 +1059,35 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 	// 提取上游请求 ID（用于关联 new-api 日志）
 	requestID := c.GetHeader("X-Request-Log-Id")
 
+	// Header 剔除/注入规则（分组优先，全局兜底），存入 context 供 doRequest 使用
+	stripHeadersCfg := group.StripHeaders
+	if len(stripHeadersCfg) == 0 {
+		stripHeadersCfg = cfg.StripHeaders
+	}
+	injectHeadersCfg := group.InjectHeaders
+	if len(injectHeadersCfg) == 0 {
+		injectHeadersCfg = cfg.InjectHeaders
+	}
+
+	// 模拟 Claude Code 客户端特征：注入 anthropic-beta header
+	if group.SimulateCC {
+		c.Set("_simulate_cc", true)
+	}
+
+	if len(stripHeadersCfg) > 0 || len(injectHeadersCfg) > 0 {
+		if stripHeadersCfg == nil {
+			stripHeadersCfg = []string{}
+		}
+		if injectHeadersCfg == nil {
+			injectHeadersCfg = map[string]string{}
+		}
+		c.Set("_strip_headers", stripHeadersCfg)
+		c.Set("_inject_headers", injectHeadersCfg)
+	}
+
+	// 提取请求头用于日志记录（应用相同的剔除规则）
+	reqHeaders := extractRequestHeadersWithRules(c, stripHeadersCfg, injectHeadersCfg)
+
 	maxRetries := h.balancer.ActiveCount(cfg, group.ID)
 	if maxRetries == 0 {
 		if logEnabled {
@@ -1051,7 +1096,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 				SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
 				Status: 502, Duration: time.Since(startTime).Milliseconds(),
 				Action: "error", Detail: "no active upstream",
-				Stream: reqStream, RequestBody: string(body),
+				Stream: reqStream, RequestHeaders: reqHeaders, RequestBody: string(body),
 			})
 		}
 		anthropicError(c, http.StatusBadGateway, "api_error", "no active upstream")
@@ -1110,6 +1155,10 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 		} else {
 			resp, err = h.doRequest(c, upstream, sendBody)
 		}
+		// 使用实际转发给上游的请求头（含 CC 模拟注入等）
+		if fh, ok := c.Get("_forwarded_headers"); ok {
+			reqHeaders = fh.(map[string]string)
+		}
 		ttfb := time.Since(attemptStart).Milliseconds()
 		h.balancer.DecLoad(upstream.ID)
 
@@ -1122,7 +1171,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 					UpstreamID: upstream.ID, Remark: upstream.Remark,
 					Status: 0, Duration: time.Since(startTime).Milliseconds(),
 					Action: "failover", Detail: fmt.Sprintf("连接错误: %v", err), RetryCount: attempt,
-					Stream: reqStream, RequestBody: string(body),
+					Stream: reqStream, RequestHeaders: reqHeaders, RequestBody: string(body),
 				})
 			}
 			// 客户端主动断开（context canceled）不标记上游故障
@@ -1170,7 +1219,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 							UpstreamID: upstream.ID, Remark: upstream.Remark,
 							Status: statusCode, Duration: time.Since(startTime).Milliseconds(),
 							Action: "error", Detail: detail, RetryCount: attempt,
-							Stream: reqStream, RequestBody: string(body), ResponseBody: errBodyStr,
+							Stream: reqStream, RequestHeaders: reqHeaders, RequestBody: string(body), ResponseBody: errBodyStr,
 						})
 					}
 					resp.Body.Close()
@@ -1212,7 +1261,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 					UpstreamID: upstream.ID, Remark: upstream.Remark,
 					Status: statusCode, Duration: time.Since(startTime).Milliseconds(),
 					Action: "failover", Detail: detail, RetryCount: attempt,
-					Stream: reqStream, RequestBody: string(body), ResponseBody: errBodyStr,
+					Stream: reqStream, RequestHeaders: reqHeaders, RequestBody: string(body), ResponseBody: errBodyStr,
 				})
 			}
 			resp.Body.Close()
@@ -1293,6 +1342,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			Action: "success", RetryCount: attempt, Stream: reqStream,
 			InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
 			CacheReadTokens: usage.CacheReadInputTokens, CacheWriteTokens: usage.CacheCreationInputTokens,
+			RequestHeaders: reqHeaders,
 			RequestBody: string(body),
 			ResponseBody: string(respBodyBytes),
 		}
@@ -1332,7 +1382,7 @@ func (h *Handler) proxyMessages(c *gin.Context) {
 			SessionKey: sessionKey, ClientIP: c.ClientIP(), RequestID: requestID, Model: reqModel,
 			Status: 502, Duration: time.Since(startTime).Milliseconds(),
 			Action: "error", Detail: "all upstreams failed",
-			Stream: reqStream, RequestBody: string(body),
+			Stream: reqStream, RequestHeaders: reqHeaders, RequestBody: string(body),
 		})
 	}
 	anthropicError(c, http.StatusBadGateway, "api_error", "all upstreams failed")
@@ -1369,6 +1419,21 @@ func (h *Handler) doRequest(c *gin.Context, upstream *model.Upstream, body []byt
 	if !upstream.SupportFast {
 		stripFastModeBeta(req)
 	}
+
+	// 应用 header 剔除/注入规则
+	if strip, ok := c.Get("_strip_headers"); ok {
+		if inject, ok2 := c.Get("_inject_headers"); ok2 {
+			applyHeaderRules(req, strip.([]string), inject.(map[string]string))
+		}
+	}
+
+	// 模拟 Claude Code 客户端：注入 anthropic-beta header
+	if _, ok := c.Get("_simulate_cc"); ok {
+		injectCCHeaders(req)
+	}
+
+	// 保存实际转发的请求头供日志使用
+	saveForwardedHeaders(c, req)
 
 	return h.client.Do(req)
 }
@@ -1978,4 +2043,265 @@ func stripFastModeBeta(req *http.Request) {
 	} else {
 		req.Header.Set("Anthropic-Beta", strings.Join(kept, ","))
 	}
+}
+
+// extractRequestHeaders 从 gin.Context 提取请求头用于日志记录（排除敏感头）
+func extractRequestHeaders(c *gin.Context) map[string]string {
+	headers := make(map[string]string)
+	for key, vals := range c.Request.Header {
+		k := strings.ToLower(key)
+		if k == "authorization" || k == "x-api-key" || k == "cookie" {
+			continue
+		}
+		headers[key] = strings.Join(vals, ", ")
+	}
+	return headers
+}
+
+// extractRequestHeadersWithRules 从 gin.Context 提取请求头并应用剔除/注入规则
+func extractRequestHeadersWithRules(c *gin.Context, stripHeaders []string, injectHeaders map[string]string) map[string]string {
+	headers := extractRequestHeaders(c)
+
+	// 应用剔除规则
+	for _, h := range stripHeaders {
+		for key := range headers {
+			if strings.EqualFold(key, h) {
+				delete(headers, key)
+			}
+		}
+	}
+
+	// 应用注入规则
+	for k, v := range injectHeaders {
+		headers[k] = v
+	}
+
+	return headers
+}
+
+// applyHeaderRules 在已复制的请求头上应用剔除和注入规则
+func applyHeaderRules(req *http.Request, stripHeaders []string, injectHeaders map[string]string) {
+	for _, h := range stripHeaders {
+		req.Header.Del(h)
+	}
+	for k, v := range injectHeaders {
+		req.Header.Set(k, v)
+	}
+}
+
+// saveForwardedHeaders 将实际转发给上游的请求头保存到 gin.Context，供日志记录使用
+func saveForwardedHeaders(c *gin.Context, req *http.Request) {
+	headers := make(map[string]string)
+	for key, vals := range req.Header {
+		k := strings.ToLower(key)
+		if k == "authorization" || k == "x-api-key" || k == "cookie" {
+			continue
+		}
+		headers[key] = strings.Join(vals, ", ")
+	}
+	if req.ContentLength >= 0 {
+		headers["Content-Length"] = strconv.FormatInt(req.ContentLength, 10)
+	}
+	c.Set("_forwarded_headers", headers)
+}
+
+// orderedMarshal 序列化 map，确保 model 字段在首位，其余按默认字母序
+func orderedMarshal(m map[string]any) ([]byte, error) {
+	if _, ok := m["model"]; !ok {
+		return json.Marshal(m)
+	}
+
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+
+	// model 放首位
+	keyJSON, _ := json.Marshal("model")
+	valJSON, err := json.Marshal(m["model"])
+	if err != nil {
+		return nil, err
+	}
+	buf.Write(keyJSON)
+	buf.WriteByte(':')
+	buf.Write(valJSON)
+
+	// 其余字段按字母序
+	keys := make([]string, 0, len(m)-1)
+	for k := range m {
+		if k != "model" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		buf.WriteByte(',')
+		kJSON, _ := json.Marshal(k)
+		vJSON, err := json.Marshal(m[k])
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(kJSON)
+		buf.WriteByte(':')
+		buf.Write(vJSON)
+	}
+
+	buf.WriteByte('}')
+	return buf.Bytes(), nil
+}
+
+// ccBetaFeatures 是 Claude Code 客户端所需的 anthropic-beta 特征列表
+var ccBetaFeatures = []string{
+	"claude-code-20250219",
+	"context-1m-2025-08-07",
+	"interleaved-thinking-2025-05-14",
+	"redact-thinking-2026-02-12",
+	"context-management-2025-06-27",
+	"prompt-caching-scope-2026-01-05",
+	"advanced-tool-use-2025-11-20",
+	"effort-2025-11-24",
+}
+
+const ccSystemText = "You are Claude Code, Anthropic's official CLI for Claude."
+
+// injectCCBody 注入 Claude Code 客户端特征到请求体，返回是否有修改
+func injectCCBody(parsed map[string]any) bool {
+	modified := false
+
+	// 注入 metadata.user_id（仅在客户端没传时）
+	metadata, _ := parsed["metadata"].(map[string]any)
+	if metadata == nil {
+		metadata = map[string]any{}
+		parsed["metadata"] = metadata
+	}
+	userIDStr, _ := metadata["user_id"].(string)
+	if userIDStr == "" {
+		deviceID := generateDeviceID()
+		sessionID := generateUUID()
+		uidJSON, _ := json.Marshal(map[string]any{
+			"device_id":    deviceID,
+			"account_uuid": "",
+			"session_id":   sessionID,
+		})
+		metadata["user_id"] = string(uidJSON)
+		modified = true
+	}
+
+	// 注入 system（如果不存在 CC 标识）
+	if !hasSystemCCMarker(parsed) {
+		ccEntry := map[string]any{
+			"type": "text",
+			"text": ccSystemText,
+		}
+		existing, ok := parsed["system"]
+		if !ok {
+			parsed["system"] = []any{ccEntry}
+		} else if arr, ok := existing.([]any); ok {
+			// 插入到第一个位置
+			parsed["system"] = append([]any{ccEntry}, arr...)
+		} else if str, ok := existing.(string); ok {
+			// string 格式的 system，转为数组
+			parsed["system"] = []any{
+				ccEntry,
+				map[string]any{"type": "text", "text": str},
+			}
+		}
+		modified = true
+	}
+
+	// 注入 max_tokens（如果客户端没传）
+	if _, ok := parsed["max_tokens"]; !ok {
+		parsed["max_tokens"] = 64000
+		modified = true
+	}
+
+	return modified
+}
+
+// hasSystemCCMarker 检查 system 中是否已包含 Claude Code 标识
+func hasSystemCCMarker(parsed map[string]any) bool {
+	sys, ok := parsed["system"]
+	if !ok {
+		return false
+	}
+	switch v := sys.(type) {
+	case string:
+		return strings.Contains(v, ccSystemText)
+	case []any:
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				if text, ok := m["text"].(string); ok && strings.Contains(text, ccSystemText) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// injectCCHeaders 注入 Claude Code 所需的全部请求头（已有的不覆盖）
+func injectCCHeaders(req *http.Request) {
+	// User-Agent：已经是 claude-cli 则保留，否则替换
+	if !strings.HasPrefix(req.Header.Get("User-Agent"), "claude-cli/") {
+		req.Header.Set("User-Agent", "claude-cli/2.1.96 (external, cli)")
+	}
+
+	// Anthropic-Version
+	if req.Header.Get("Anthropic-Version") == "" {
+		req.Header.Set("Anthropic-Version", "2023-06-01")
+	}
+
+	// Accept
+	if !strings.Contains(req.Header.Get("Accept"), "application/json") {
+		req.Header.Set("Accept", "application/json")
+	}
+
+	// Accept-Encoding
+	if req.Header.Get("Accept-Encoding") == "" {
+		req.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
+	}
+
+	// X-App
+	if req.Header.Get("X-App") == "" {
+		req.Header.Set("X-App", "cli")
+	}
+
+	// Anthropic-Beta：合并补充缺少的特征
+	existing := req.Header.Get("Anthropic-Beta")
+	features := make(map[string]bool)
+	if existing != "" {
+		for _, f := range strings.Split(existing, ",") {
+			features[strings.TrimSpace(f)] = true
+		}
+	}
+	added := false
+	for _, f := range ccBetaFeatures {
+		if !features[f] {
+			features[f] = true
+			added = true
+		}
+	}
+	if added {
+		parts := make([]string, 0, len(features))
+		for f := range features {
+			parts = append(parts, f)
+		}
+		sort.Strings(parts)
+		req.Header.Set("Anthropic-Beta", strings.Join(parts, ","))
+	}
+}
+
+// generateDeviceID 生成一个稳定的设备 ID（64 字符 hex）
+func generateDeviceID() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}
+
+// generateUUID 生成一个 v4 UUID
+func generateUUID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }

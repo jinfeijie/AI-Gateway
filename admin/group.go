@@ -29,6 +29,7 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 			AllowStream    *bool                   `json:"allow_stream"`
 			AllowNonStream *bool                   `json:"allow_non_stream"`
 			NoCache        *bool                   `json:"no_cache"`
+			SimulateCC     *bool                   `json:"simulate_cc"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -66,6 +67,9 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 		if req.NoCache != nil {
 			g.NoCache = *req.NoCache
 		}
+		if req.SimulateCC != nil {
+			g.SimulateCC = *req.SimulateCC
+		}
 		if req.LogSampleRate != nil {
 			g.LogSampleRate = *req.LogSampleRate
 		}
@@ -94,6 +98,7 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 			AllowStream           *bool                   `json:"allow_stream"`
 			AllowNonStream        *bool                   `json:"allow_non_stream"`
 			NoCache               *bool                   `json:"no_cache"`
+			SimulateCC            *bool                   `json:"simulate_cc"`
 			SignatureEnabled      *bool                   `json:"signature_enabled"`
 			SignatureReplacements *[]string               `json:"signature_replacements"`
 		}
@@ -150,6 +155,9 @@ func registerGroupRoutes(r *gin.RouterGroup, s *store.Store) {
 					}
 					if req.NoCache != nil {
 						cfg.Groups[i].NoCache = *req.NoCache
+					}
+					if req.SimulateCC != nil {
+						cfg.Groups[i].SimulateCC = *req.SimulateCC
 					}
 					if req.SignatureEnabled != nil {
 						cfg.Groups[i].SignatureEnabled = *req.SignatureEnabled

@@ -257,6 +257,29 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
   </div>
   <div id="if-list" style="margin-top:8px"></div>
   </div>
+
+  <div id="sh-section">
+  <hr style="margin:24px 0;border:none;border-top:1px solid #1f2937">
+  <h4 style="margin:0 0 8px;font-size:15px">Header 剔除</h4>
+  <p style="font-size:13px;color:#9ca3af;margin:0 0 12px">转发前从请求头中删除指定 Header，不区分大小写。</p>
+  <div class="form-row">
+    <input id="sh-input" placeholder="Header 名，如 X-Custom-Debug" style="font-family:monospace">
+    <button class="btn btn-primary" onclick="addStripHeader()">添加</button>
+  </div>
+  <div id="sh-list" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+  </div>
+
+  <div id="ih-section">
+  <hr style="margin:24px 0;border:none;border-top:1px solid #1f2937">
+  <h4 style="margin:0 0 8px;font-size:15px">Header 注入</h4>
+  <p style="font-size:13px;color:#9ca3af;margin:0 0 12px">转发前向请求头中注入或覆盖指定 Header。</p>
+  <div class="form-row">
+    <input id="ih-name" placeholder="Header 名，如 X-Gateway-Source" style="font-family:monospace;flex:1">
+    <input id="ih-value" placeholder="Header 值，如 ai-gateway" style="font-family:monospace;flex:1">
+    <button class="btn btn-primary" onclick="addInjectHeader()">添加</button>
+  </div>
+  <div id="ih-list" style="margin-top:8px"></div>
+  </div>
 </div>
 
 <!-- 会话亲和 -->
@@ -516,6 +539,12 @@ label { font-size: 13px; font-weight: 500; min-width: 80px; font-family: 'JetBra
       <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="gm-no-cache">无缓存模式</label>
     </div>
     <p style="font-size:12px;color:#6b7280;margin:4px 0 0">开启后缓存读计入输入 Token、缓存写计入输出 Token，缓存字段清零</p>
+  </div>
+  <div style="margin-top:12px"><label style="display:block;margin-bottom:8px">客户端模拟</label>
+    <div class="form-row">
+      <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="gm-simulate-cc">模拟 Claude Code 客户端</label>
+    </div>
+    <p style="font-size:12px;color:#6b7280;margin:4px 0 0">开启后自动注入 Claude Code 客户端特征（metadata.user_id、system 标识、anthropic-beta），使非 CC 客户端也能通过 CC 验证</p>
   </div>
   <div class="modal-footer">
     <button class="btn" onclick="closeGroupEditModal()">取消</button>
@@ -810,6 +839,7 @@ function editGroup(id) {
   document.getElementById('gm-allow-stream').checked = g.allow_stream !== false;
   document.getElementById('gm-allow-nonstream').checked = g.allow_non_stream === true;
   document.getElementById('gm-no-cache').checked = g.no_cache === true;
+  document.getElementById('gm-simulate-cc').checked = g.simulate_cc === true;
   document.getElementById('gm-mask').style.display = 'block';
   document.getElementById('gm-modal').style.display = 'block';
 }
@@ -881,7 +911,7 @@ async function saveGroupEdit() {
   const logMode = document.getElementById('gm-logmode').value;
   const logSampleRate = parseInt(document.getElementById('gm-samplerate').value) || 10;
   try {
-    await api('PUT', '/groups/' + id, { name, protocols, models: gmModels, model_mapping: gmModelMapping, failover_rules: g.failover_rules || [], health_check: g.health_check || null, log_mode: logMode, log_sample_rate: logSampleRate, allow_stream: document.getElementById('gm-allow-stream').checked, allow_non_stream: document.getElementById('gm-allow-nonstream').checked, no_cache: document.getElementById('gm-no-cache').checked });
+    await api('PUT', '/groups/' + id, { name, protocols, models: gmModels, model_mapping: gmModelMapping, failover_rules: g.failover_rules || [], health_check: g.health_check || null, log_mode: logMode, log_sample_rate: logSampleRate, allow_stream: document.getElementById('gm-allow-stream').checked, allow_non_stream: document.getElementById('gm-allow-nonstream').checked, no_cache: document.getElementById('gm-no-cache').checked, simulate_cc: document.getElementById('gm-simulate-cc').checked });
     msg('分组已更新', true);
     closeGroupEditModal();
     loadGroups();
@@ -1546,8 +1576,12 @@ async function loadErrorMappingData() {
   }
   document.getElementById('sf-section').style.display = '';
   document.getElementById('if-section').style.display = '';
+  document.getElementById('sh-section').style.display = '';
+  document.getElementById('ih-section').style.display = '';
   await loadStripFieldData();
   await loadInjectFieldData();
+  await loadStripHeaderData();
+  await loadInjectHeaderData();
   renderErrorMappings();
 }
 function renderErrorMappings() {
@@ -1657,6 +1691,80 @@ async function delInjectField(idx) {
   const url = emScope ? '/groups/' + emScope + '/inject-fields' : '/inject-fields';
   try { await api('PUT', url, injectFields); msg('已删除', true); renderInjectFields(); }
   catch(e) { injectFields.splice(idx, 0, ...removed); msg(e.message, false); }
+}
+
+// Strip Headers
+let stripHeaders = [];
+async function loadStripHeaderData() {
+  const url = emScope ? '/groups/' + emScope + '/strip-headers' : '/strip-headers';
+  const r = await api('GET', url);
+  stripHeaders = r.data || [];
+  renderStripHeaders();
+}
+function renderStripHeaders() {
+  const container = document.getElementById('sh-list');
+  if (stripHeaders.length === 0) {
+    const hint = emScope ? '未配置，将使用全局 Header 剔除兜底' : '未配置，所有 Header 原样转发';
+    container.innerHTML = '<span style="color:#6b7280;font-size:13px">' + hint + '</span>';
+    return;
+  }
+  container.innerHTML = stripHeaders.map((f, i) => `<span class="tag tag-green">${f}<span class="tag-rm" onclick="delStripHeader(${i})">&times;</span></span>`).join('');
+}
+async function addStripHeader() {
+  const input = document.getElementById('sh-input');
+  const val = input.value.trim();
+  if (!val) return;
+  if (stripHeaders.includes(val)) { msg('已存在', false); return; }
+  stripHeaders.push(val);
+  const url = emScope ? '/groups/' + emScope + '/strip-headers' : '/strip-headers';
+  try { await api('PUT', url, stripHeaders); input.value = ''; msg('已添加', true); renderStripHeaders(); }
+  catch(e) { stripHeaders.pop(); msg(e.message, false); }
+}
+async function delStripHeader(idx) {
+  const removed = stripHeaders.splice(idx, 1);
+  const url = emScope ? '/groups/' + emScope + '/strip-headers' : '/strip-headers';
+  try { await api('PUT', url, stripHeaders); msg('已删除', true); renderStripHeaders(); }
+  catch(e) { stripHeaders.splice(idx, 0, ...removed); msg(e.message, false); }
+}
+
+// Inject Headers
+let injectHeaders = {};
+async function loadInjectHeaderData() {
+  const url = emScope ? '/groups/' + emScope + '/inject-headers' : '/inject-headers';
+  const r = await api('GET', url);
+  injectHeaders = r.data || {};
+  renderInjectHeaders();
+}
+function renderInjectHeaders() {
+  const container = document.getElementById('ih-list');
+  const entries = Object.entries(injectHeaders);
+  if (entries.length === 0) {
+    const hint = emScope ? '未配置，将使用全局 Header 注入兜底' : '未配置，不注入任何 Header';
+    container.innerHTML = '<span style="color:#6b7280;font-size:13px">' + hint + '</span>';
+    return;
+  }
+  container.innerHTML = '<table style="margin:0"><thead><tr><th>Header</th><th>Value</th><th style="text-align:center">操作</th></tr></thead><tbody>' +
+    entries.map(([k, v], i) => `<tr><td><code>${k}</code></td><td><code>${v}</code></td><td style="text-align:center"><span class="tag-rm" style="cursor:pointer;color:#ef4444" onclick="delInjectHeader('${k}')">&times;</span></td></tr>`).join('') +
+    '</tbody></table>';
+}
+async function addInjectHeader() {
+  const nameInput = document.getElementById('ih-name');
+  const valueInput = document.getElementById('ih-value');
+  const name = nameInput.value.trim();
+  const value = valueInput.value.trim();
+  if (!name || !value) return;
+  if (injectHeaders[name] !== undefined) { msg('Header 已存在', false); return; }
+  injectHeaders[name] = value;
+  const url = emScope ? '/groups/' + emScope + '/inject-headers' : '/inject-headers';
+  try { await api('PUT', url, injectHeaders); nameInput.value = ''; valueInput.value = ''; msg('已添加', true); renderInjectHeaders(); }
+  catch(e) { delete injectHeaders[name]; msg(e.message, false); }
+}
+async function delInjectHeader(name) {
+  const old = injectHeaders[name];
+  delete injectHeaders[name];
+  const url = emScope ? '/groups/' + emScope + '/inject-headers' : '/inject-headers';
+  try { await api('PUT', url, injectHeaders); msg('已删除', true); renderInjectHeaders(); }
+  catch(e) { injectHeaders[name] = old; msg(e.message, false); }
 }
 
 // Sessions
@@ -2022,6 +2130,10 @@ async function showLogDetail(idx) {
     if (e.detail && e.detail !== '-') {
       html += `<div style="margin-top:12px"><b>详情：</b></div>
       <pre style="background:#1e1e2e;color:#cdd6f4;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${e.detail.replace(/</g,'&lt;')}</pre>`;
+    }
+    if (e.request_headers && Object.keys(e.request_headers).length > 0) {
+      html += `<div style="margin-top:12px"><b>请求头：</b></div>
+      <pre style="background:#1e1e2e;color:#89b4fa;border-radius:8px;padding:12px;font-size:12px;line-height:1.6;max-height:200px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin-top:6px">${Object.entries(e.request_headers).map(([k,v])=>k+': '+v).join('\n').replace(/</g,'&lt;')}</pre>`;
     }
     if (e.request_body) {
       html += `<div style="margin-top:12px;display:flex;align-items:center;gap:8px"><b>请求体：</b><button class="btn btn-secondary btn-sm" style="padding:1px 8px;font-size:11px" onclick="copyText(window._logDetailEntry.request_body)">复制</button></div>
